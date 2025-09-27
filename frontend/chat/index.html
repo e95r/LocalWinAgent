@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>LocalWinAgent — Чат</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html,body { margin:0; padding:0; height:100%; font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif; background:#0b0f14; color:#e6edf3; }
+    .wrap { display:flex; flex-direction:column; height:100%; max-width:900px; margin:0 auto; }
+    header { padding:16px 20px; border-bottom:1px solid #1f2937; position:sticky; top:0; background:#0b0f14; z-index:10; }
+    header h1 { margin:0; font-size:20px; }
+    .log { flex:1; overflow:auto; padding:16px 20px; }
+    .msg { margin-bottom:14px; line-height:1.45; }
+    .msg.you { color:#cbd5e1; }
+    .msg.bot { color:#e6edf3; }
+    .bubble { display:inline-block; padding:10px 12px; border-radius:12px; background:#111827; border:1px solid #1f2937; }
+    .you .bubble { background:#0f172a; }
+    .bot .bubble { background:#111827; }
+    .meta { font-size:12px; color:#9ca3af; margin-top:4px; }
+    .input { display:flex; gap:10px; padding:16px 20px; border-top:1px solid #1f2937; background:#0b0f14; }
+    .input input[type="text"] { flex:1; padding:12px; border-radius:10px; border:1px solid #374151; background:#0f172a; color:#e6edf3; outline:none; }
+    .input button { padding:12px 16px; border-radius:10px; border:1px solid #374151; background:#111827; color:#e6edf3; cursor:pointer; }
+    .input label { font-size:12px; color:#cbd5e1; display:flex; align-items:center; gap:6px; }
+    .status { font-size:12px; color:#9ca3af; padding:0 20px 10px; }
+    a { color:#60a5fa; text-decoration:none; }
+    a:hover { text-decoration:underline; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>LocalWinAgent — Локальный чат</h1>
+      <div class="status" id="status">Подключение…</div>
+    </header>
+
+    <div id="log" class="log" aria-live="polite" aria-label="История сообщений"></div>
+
+    <form id="form" class="input" autocomplete="off">
+      <input id="text" type="text" placeholder="Например: Открой текстовый редактор" aria-label="Сообщение">
+      <label title="Выполнять потенциально опасные действия без вопросов">
+        <input id="yes" type="checkbox"> автоподтверждение
+      </label>
+      <button id="send" type="submit">Отправить</button>
+    </form>
+  </div>
+
+  <script>
+    const log = document.getElementById('log');
+    const form = document.getElementById('form');
+    const input = document.getElementById('text');
+    const yes = document.getElementById('yes');
+    const status = document.getElementById('status');
+
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+
+    function addMessage(role, text) {
+      const item = document.createElement('div');
+      item.className = 'msg ' + role;
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = text;
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = role === 'you' ? 'Вы' : 'Агент';
+      item.appendChild(bubble);
+      item.appendChild(meta);
+      log.appendChild(item);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    ws.onopen = () => { status.textContent = 'Подключено'; };
+    ws.onclose = () => { status.textContent = 'Отключено'; };
+    ws.onerror = () => { status.textContent = 'Ошибка соединения'; };
+
+    ws.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        const answer = (typeof data.answer === 'string') ? data.answer : JSON.stringify(data, null, 2);
+        addMessage('bot', answer);
+      } catch (e) {
+        addMessage('bot', 'Нераспознанный ответ: ' + ev.data);
+      }
+    };
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      addMessage('you', text);
+      ws.send(JSON.stringify({ text, yes: yes.checked }));
+      input.value = '';
+      input.focus();
+    });
+  </script>
+</body>
+</html>
