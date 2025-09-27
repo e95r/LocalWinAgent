@@ -1,0 +1,22 @@
+# Список приложений и команд запуска
+apps:
+  notepad:
+    title: "Блокнот"
+    command: "notepad.exe"
+    process_name: "notepad.exe"
+  vscode:
+    title: "Visual Studio Code"
+    command: "C:\\Users\\%USERNAME%\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
+    process_name: "Code.exe"
+  word:
+    title: "Microsoft Word"
+    command: "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE"
+    process_name: "WINWORD.EXE"
+  excel:
+    title: "Microsoft Excel"
+    command: "C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE"
+    process_name: "EXCEL.EXE"
+  chrome:
+    title: "Google Chrome"
+    command: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    process_name: "chrome.exe"
