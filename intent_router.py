@@ -7,7 +7,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Literal, Optional
+from typing import Callable, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Tuple
 
 try:  # pragma: no cover - rapidfuzz может отсутствовать в тестовой среде
     from rapidfuzz import fuzz  # type: ignore
@@ -39,8 +39,8 @@ except ModuleNotFoundError:  # pragma: no cover
 from config import load_config
 from tools.apps import ApplicationManager
 from tools.files import ConfirmationRequiredError, FileManager, get_desktop_path, open_path
-from tools.search import EverythingNotInstalledError, search_files
-from tools.web import WebAutomation
+from tools.search import EverythingNotInstalledError, search_local
+from tools.web import WebAutomation, open_site, search_web
 
 logger = logging.getLogger(__name__)
 
@@ -61,23 +61,439 @@ class AgentSession:
 @dataclass
 class SessionState:
     last_results: List[str] = field(default_factory=list)
+    last_kind: Literal["file", "app", "web", "none"] = "none"
     last_task: Literal["search_files", ""] = ""
     last_updated: float = field(default_factory=time.time)
 
-    def set_results(self, results: List[str], task: Literal["search_files", ""] = "search_files") -> None:
+    def set_results(
+        self,
+        results: List[str],
+        task: Literal["search_files", ""] = "search_files",
+        *,
+        kind: Literal["file", "app", "web", "none"] = "file",
+    ) -> None:
         self.last_results = list(results)
         self.last_task = task if results else ""
+        self.last_kind = kind if results else "none"
         self.last_updated = time.time()
 
-    def get_results(self) -> List[str]:
+    def get_results(
+        self, *, kind: Literal["any", "file", "app", "web"] = "any"
+    ) -> List[str]:
         if self.last_results and time.time() - self.last_updated > 900:
             self.clear_results()
+        if kind != "any" and self.last_kind != kind:
+            return []
         return list(self.last_results)
 
     def clear_results(self) -> None:
         self.last_results = []
         self.last_task = ""
+        self.last_kind = "none"
         self.last_updated = time.time()
+
+    def clear(self) -> None:
+        self.clear_results()
+
+
+class IntentInferencer:
+    """Определение вероятного интента пользователя по тексту."""
+
+    RE_WORD = re.compile(r"[\w-]+", re.UNICODE)
+
+    STOP_WORDS = {
+        "а",
+        "еще",
+        "ещё",
+        "в",
+        "во",
+        "это",
+        "этот",
+        "эта",
+        "эту",
+        "эти",
+        "тот",
+        "та",
+        "то",
+        "на",
+        "надо",
+        "нужно",
+        "нужен",
+        "нужна",
+        "нужны",
+        "мне",
+        "пожалуйста",
+        "пожалуй",
+        "давай",
+        "да",
+        "нет",
+        "хочу",
+        "хотел",
+        "хотела",
+        "можно",
+        "дайте",
+        "дай",
+        "глянь",
+        "глянуть",
+        "посмотри",
+        "посмотреть",
+        "посмотри-ка",
+        "послушай",
+        "послушать",
+        "покажи",
+        "показать",
+        "открой",
+        "открыть",
+        "запусти",
+        "запустить",
+        "запуск",
+        "просто",
+        "это",
+        "там",
+        "его",
+        "ее",
+        "её",
+        "их",
+        "по",
+        "из",
+        "для",
+        "как",
+        "что",
+        "какой",
+        "какая",
+        "какие",
+        "тут",
+        "вот",
+        "бы",
+        "быть",
+        "плиз",
+        "pls",
+        "please",
+        "можешь",
+        "можешь",
+        "могу",
+        "можно",
+        "сильно",
+        "прям",
+        "очень",
+    }
+
+    GENERIC_FILE_WORDS = {"файл", "файлы", "папка", "папку", "каталог", "документ", "документы"}
+
+    SEARCH_MARKERS = {
+        "найди",
+        "найти",
+        "поищи",
+        "поищем",
+        "ищи",
+        "поиск",
+        "хочу посмотреть в интернете",
+        "посмотри в интернете",
+        "искать",
+        "отыщи",
+    }
+
+    NEGATIVE_SEARCH_MARKERS = {"не ищи", "не надо искать", "без интернета"}
+
+    WEB_SEARCH_HINTS = {
+        "в интернете",
+        "в сети",
+        "в гугле",
+        "в google",
+        "в яндексе",
+        "в yandex",
+        "в бинг",
+        "в bing",
+        "в вебе",
+        "в сети",
+    }
+
+    WEB_KEYWORDS = {
+        "документация",
+        "страница",
+        "сайт",
+        "страничку",
+        "википедия",
+        "wiki",
+        "docs",
+        "официальный",
+        "официальную",
+        "блог",
+        "мануал",
+        "руководство",
+        "форум",
+        "гайд",
+        "tutorial",
+        "инструкция",
+        "описание",
+        "продукт",
+        "release",
+    }
+
+    FILE_DOMAINS: Dict[str, Dict[str, Sequence[str]]] = {
+        "documents": {
+            "keywords": (
+                "документ",
+                "документы",
+                "отчёт",
+                "отчет",
+                "смета",
+                "invoice",
+                "инвойс",
+                "контракт",
+                "презентация",
+                "спецификация",
+                "спека",
+                "протокол",
+                "план",
+                "таблица",
+                "заметка",
+            ),
+            "extensions": (".pdf", ".doc", ".docx", ".txt", ".rtf", ".xlsx", ".xls", ".ppt", ".pptx"),
+            "default_terms": ("pdf", "docx", "xlsx"),
+        },
+        "images": {
+            "keywords": (
+                "фото",
+                "фотку",
+                "фотография",
+                "картинка",
+                "картинку",
+                "изображение",
+                "скрин",
+                "скриншот",
+                "снимок",
+                "превью",
+            ),
+            "extensions": (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".svg"),
+            "default_terms": ("png", "jpg", "screenshot"),
+        },
+        "audio": {
+            "keywords": (
+                "музыка",
+                "музыку",
+                "трек",
+                "треков",
+                "песня",
+                "песню",
+                "аудио",
+                "sound",
+            ),
+            "extensions": (".mp3", ".wav", ".flac", ".aac", ".ogg"),
+            "default_terms": ("mp3", "audio"),
+        },
+        "video": {
+            "keywords": (
+                "видео",
+                "ролик",
+                "фильм",
+                "запись",
+                "запусти видео",
+                "клип",
+            ),
+            "extensions": (".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm"),
+            "default_terms": ("mp4", "video"),
+        },
+        "archives": {
+            "keywords": ("архив", "архивы", "backup", "бэкап"),
+            "extensions": (".zip", ".rar", ".7z", ".tar", ".gz"),
+            "default_terms": ("zip", "rar"),
+        },
+    }
+
+    APP_EXTRA_ALIASES: Dict[str, Sequence[str]] = {
+        "calc": ("калькулятор", "посчитать", "calculator", "calc"),
+        "notepad": ("блокнот", "заметки", "notepad", "текстовый редактор"),
+        "excel": ("excel", "ексель", "таблицы", "таблицу", "spreadsheet"),
+        "word": ("word", "ворд", "документы word"),
+        "chrome": ("браузер", "chrome", "хром", "google"),
+        "vscode": ("vscode", "vs code", "редактор кода", "код", "visual studio code"),
+    }
+
+    def __init__(self, app_aliases: Mapping[str, str]):
+        alias_map: Dict[str, str] = {}
+        for alias, key in app_aliases.items():
+            alias_map[alias.lower()] = key
+        for key, phrases in self.APP_EXTRA_ALIASES.items():
+            for phrase in phrases:
+                alias_map.setdefault(phrase.lower(), key)
+        self._app_aliases = alias_map
+
+    @staticmethod
+    def _merge_terms(terms: Iterable[str]) -> List[str]:
+        seen: set[str] = set()
+        ordered: List[str] = []
+        for term in terms:
+            cleaned = term.strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            ordered.append(cleaned)
+        return ordered
+
+    def _tokenize(self, text: str) -> List[str]:
+        return [match.group(0) for match in self.RE_WORD.finditer(text)]
+
+    def _extract_keywords(self, tokens: Sequence[str]) -> List[str]:
+        keywords: List[str] = []
+        for token in tokens:
+            lowered = token.lower()
+            if lowered in self.STOP_WORDS:
+                continue
+            if lowered.isdigit():
+                continue
+            keywords.append(lowered)
+        return keywords
+
+    def _score_app(self, text: str) -> Tuple[Optional[str], float]:
+        best_key: Optional[str] = None
+        best_score = 0.0
+        lowered = text.lower()
+        for alias, key in self._app_aliases.items():
+            if alias in lowered:
+                score = 0.85 if len(alias) > 2 else 0.65
+            else:
+                score = fuzz.partial_ratio(lowered, alias) / 100.0
+            if score > best_score:
+                best_score = score
+                best_key = key
+        if best_score < 0.55:
+            return None, 0.0
+        return best_key, best_score
+
+    def _score_file(
+        self, tokens: Sequence[str], text: str, keywords: Sequence[str]
+    ) -> Tuple[float, List[str], str]:
+        best_score = 0.0
+        best_terms: List[str] = []
+        best_domain = "documents"
+        lowered = text.lower()
+        for domain, data in self.FILE_DOMAINS.items():
+            domain_keywords = {item.lower() for item in data["keywords"]}
+            hits = [token.lower() for token in tokens if token.lower() in domain_keywords]
+            ext_hits = [ext for ext in data["extensions"] if ext in lowered]
+            score = 0.0
+            if hits:
+                score = 0.6 + min(len(hits), 3) * 0.08
+            elif ext_hits:
+                score = 0.58
+            if not score:
+                continue
+            score += min(len(ext_hits), 3) * 0.03
+            filtered = [term for term in keywords if term not in self.GENERIC_FILE_WORDS]
+            if not filtered:
+                filtered = hits or list(keywords)
+            combined = self._merge_terms(filtered + list(data.get("default_terms", ())))
+            if score > best_score:
+                best_score = score
+                best_terms = combined
+                best_domain = domain
+        return best_score, best_terms, best_domain
+
+    def _score_web(
+        self,
+        tokens: Sequence[str],
+        text: str,
+        keywords: Sequence[str],
+        explicit_hint: bool,
+    ) -> Tuple[float, List[str]]:
+        lowered = text.lower()
+        hits = [token.lower() for token in tokens if token.lower() in self.WEB_KEYWORDS]
+        score = 0.0
+        if hits:
+            score = 0.6 + min(len(hits), 3) * 0.05
+        if explicit_hint:
+            score = max(score, 0.65)
+        if re.search(r"https?://", lowered) or re.search(r"www\.", lowered):
+            score = max(score, 0.7)
+        if re.search(r"\b[a-z0-9-]+\.[a-z]{2,}\b", lowered):
+            score = max(score, 0.65)
+        if score == 0:
+            return 0.0, []
+        filtered = [term for term in keywords if term not in hits]
+        if not filtered:
+            filtered = list(keywords)
+        return score, self._merge_terms(filtered)
+
+    def _contains_phrase(self, text: str, phrases: Iterable[str]) -> bool:
+        return any(phrase in text for phrase in phrases)
+
+    def infer(self, text: str, ctx: SessionState) -> Dict[str, object]:
+        normalized = text.strip().lower()
+        if not normalized:
+            return {"kind": "other", "query": "", "confidence": 0.0}
+
+        tokens = self._tokenize(normalized)
+        keywords = self._extract_keywords(tokens)
+        explicit_search = self._contains_phrase(normalized, self.SEARCH_MARKERS)
+        explicit_web_hint = self._contains_phrase(normalized, self.WEB_SEARCH_HINTS)
+        if self._contains_phrase(normalized, self.NEGATIVE_SEARCH_MARKERS):
+            explicit_search = False
+            explicit_web_hint = False
+
+        app_key, app_score = self._score_app(normalized)
+        file_score, file_terms, file_domain = self._score_file(tokens, normalized, keywords)
+        web_score, web_terms = self._score_web(tokens, normalized, keywords, explicit_web_hint or explicit_search)
+
+        if app_key and app_score >= 0.8 and app_score >= max(file_score, web_score) + 0.1:
+            return {"kind": "open_app", "query": app_key, "confidence": app_score}
+
+        if explicit_search:
+            if file_score >= web_score:
+                query_terms = file_terms or keywords or tokens
+                query = " ".join(query_terms) or normalized
+                return {
+                    "kind": "search_file",
+                    "query": query.strip(),
+                    "confidence": max(file_score, 0.55),
+                    "domain": file_domain,
+                }
+            query_terms = web_terms or keywords or tokens
+            query = " ".join(query_terms) or normalized
+            return {
+                "kind": "search_web",
+                "query": query.strip(),
+                "confidence": max(web_score, 0.55),
+            }
+
+        if app_key and app_score >= 0.75 and app_score >= max(file_score, web_score) + 0.05:
+            return {"kind": "open_app", "query": app_key, "confidence": app_score}
+
+        if file_score >= 0.62 and file_score >= web_score - 0.05:
+            query_terms = file_terms or keywords or tokens
+            query = " ".join(query_terms) or normalized
+            return {
+                "kind": "open_file",
+                "query": query.strip(),
+                "confidence": file_score,
+                "domain": file_domain,
+            }
+
+        if web_score >= 0.62:
+            query_terms = web_terms or keywords or tokens
+            query = " ".join(query_terms) or normalized
+            return {"kind": "open_web", "query": query.strip(), "confidence": web_score}
+
+        if (
+            file_score >= 0.55
+            and web_score >= 0.55
+            and abs(file_score - web_score) <= 0.12
+        ):
+            return {
+                "kind": "other",
+                "query": "",
+                "confidence": 0.0,
+                "clarify": ("file", "web"),
+            }
+
+        if app_key and app_score >= 0.6:
+            return {"kind": "open_app", "query": app_key, "confidence": app_score}
+
+        return {
+            "kind": "other",
+            "query": " ".join(keywords) if keywords else normalized,
+            "confidence": 0.0,
+        }
 
 
 class LLMClient:
@@ -127,7 +543,11 @@ class IntentRouter:
     DELETE_RE = re.compile(r"^(?:удали|удалить)\s+(.+)$", re.IGNORECASE)
     LIST_RE = re.compile(r"^(?:покажи|список|list)\s+(?:каталог|папку)\s+(.+)$", re.IGNORECASE)
     RE_OPEN_PRONOUN = re.compile(r"^(открой|покажи)\s+(его|её|его\s+пожалуйста|этот|это)$", re.IGNORECASE)
-    RE_OPEN_INDEX = re.compile(r"^(открой|покажи)\s+(\d+|первый|последний)$", re.IGNORECASE)
+    RE_OPEN_INDEX = re.compile(
+        r"^(открой|покажи)\s+(?:ссылку\s+|файл\s+|результат\s+)?"
+        r"(\d+|первый|первую|второй|вторую|третий|третью|четвертый|четвертую|последний|последнюю)$",
+        re.IGNORECASE,
+    )
     RE_RESET_CTX = re.compile(r"^(сбрось\s+контекст|очисти\s+память)$", re.IGNORECASE)
 
     APP_KEYWORDS: Dict[str, tuple[str, ...]] = {
@@ -147,6 +567,7 @@ class IntentRouter:
 
         self.file_manager = FileManager(paths_cfg.get("whitelist", []))
         self.app_manager = ApplicationManager(apps_cfg.get("apps", {}))
+        self.intent_inferencer = IntentInferencer(self.app_manager.alias_map)
         self.web_automation = WebAutomation(
             browser=web_cfg.get("browser", "chromium"),
             headless=web_cfg.get("headless", False),
@@ -154,6 +575,10 @@ class IntentRouter:
         )
         self.llm_client = LLMClient()
         self.download_dir = paths_cfg.get("default_downloads")
+        self.search_whitelist = [
+            str(Path(os.path.expandvars(path)).expanduser().resolve(strict=False))
+            for path in paths_cfg.get("whitelist", [])
+        ]
 
     @staticmethod
     def _make_response(
@@ -373,7 +798,7 @@ class IntentRouter:
     ) -> Optional[Dict[str, object]]:
         normalized = message.strip().lower()
         if self.RE_RESET_CTX.match(normalized):
-            session_state.clear_results()
+            session_state.clear()
             return self._make_response("Контекст очищен.", ok=True)
 
         match_pronoun = self.RE_OPEN_PRONOUN.match(normalized)
@@ -384,16 +809,27 @@ class IntentRouter:
         results = session_state.get_results()
         if not results:
             return self._make_response(
-                "Нет сохранённых результатов поиска. Сначала скажите: найди файл …",
+                "Нет сохранённых результатов. Сначала попросите найти или открыть что-то конкретное.",
                 ok=False,
             )
 
+        index_map = {
+            "первый": 1,
+            "первую": 1,
+            "второй": 2,
+            "вторую": 2,
+            "третий": 3,
+            "третью": 3,
+            "четвертый": 4,
+            "четвертую": 4,
+            "последний": len(results),
+            "последнюю": len(results),
+        }
+
         if match_index:
             raw_index = match_index.group(2).strip().lower()
-            if raw_index == "первый":
-                index = 1
-            elif raw_index == "последний":
-                index = len(results)
+            if raw_index in index_map:
+                index = index_map[raw_index]
             else:
                 try:
                     index = int(raw_index)
@@ -409,17 +845,39 @@ class IntentRouter:
             )
 
         target = results[index - 1]
-        open_result = open_path(target)
         session_state.last_updated = time.time()
-        if not open_result.get("ok"):
-            error = open_result.get("error", "Не удалось открыть путь")
-            return self._make_response(
-                f"Не удалось открыть: {open_result.get('path', target)} (ok=False, ошибка: {error})",
-                ok=False,
-            )
+        kind = session_state.last_kind
 
-        reply = f"Открыл: {open_result['path']} (ok=True)"
-        if match_pronoun and len(results) > 1:
+        if kind == "web":
+            try:
+                opened_url = open_site(target)
+            except Exception as exc:  # pragma: no cover - зависит от окружения
+                logger.exception("Не удалось открыть ссылку %s: %s", target, exc)
+                return self._make_response(
+                    f"Не удалось открыть ссылку: {target}",
+                    ok=False,
+                )
+            reply = f"Открыл ссылку: {opened_url}"
+        elif kind == "app":
+            try:
+                reply = self.app_manager.launch(target)
+            except Exception as exc:  # pragma: no cover - запуск приложений зависит от ОС
+                logger.exception("Не удалось запустить %s: %s", target, exc)
+                return self._make_response(
+                    f"Не получилось запустить {target}",
+                    ok=False,
+                )
+        else:
+            open_result = open_path(target)
+            if not open_result.get("ok"):
+                error = open_result.get("error", "Не удалось открыть путь")
+                return self._make_response(
+                    f"Не удалось открыть: {open_result.get('path', target)} (ошибка: {error})",
+                    ok=False,
+                )
+            reply = open_result.get("reply") or f"Открыл: {open_result.get('path', target)}"
+
+        if match_pronoun and len(results) > 1 and kind != "app":
             reply += "\nЕсли нужен другой результат, уточните номер."
         return self._make_response(reply, ok=True)
 
@@ -437,6 +895,92 @@ class IntentRouter:
             result = handler(message, session)
             if result is not None:
                 return result
+        return None
+
+    def _handle_inferred_intent(
+        self, message: str, session: AgentSession, session_state: SessionState
+    ) -> Optional[Dict[str, object]]:
+        inference = self.intent_inferencer.infer(message, session_state)
+        if not inference:
+            return None
+
+        clarify = inference.get("clarify")
+        if clarify:
+            return self._make_response("Открыть как файл или как сайт?", ok=False)
+
+        kind = inference.get("kind", "other")
+        confidence = float(inference.get("confidence", 0.0))
+        query = str(inference.get("query", "")).strip()
+
+        if kind in {"open_file", "search_file", "open_web", "search_web"} and not query:
+            return None
+
+        if kind == "open_app":
+            if confidence < 0.6:
+                return None
+            resolved = self.app_manager.resolve(query) or query
+            try:
+                reply = self.app_manager.launch(resolved)
+            except KeyError:
+                return self._make_response("Не знаю, как запустить это приложение.", ok=False)
+            session_state.set_results([resolved], task="", kind="app")
+            return self._make_response(reply, ok=True)
+
+        if kind in {"open_file", "search_file"}:
+            extensions = []
+            domain = inference.get("domain")
+            if domain and domain in IntentInferencer.FILE_DOMAINS:
+                extensions = [ext.lower() for ext in IntentInferencer.FILE_DOMAINS[domain]["extensions"]]
+            results = search_local(
+                query,
+                max_results=25,
+                whitelist=self.search_whitelist or None,
+                extensions=extensions or None,
+            )
+            if not results:
+                session_state.clear_results()
+                return self._make_response("Ничего подходящего не нашёл.", ok=False)
+            session_state.set_results(results, task="search_files", kind="file")
+            if kind == "search_file":
+                lines = ["Нашёл следующие варианты:"]
+                for idx, item in enumerate(results, 1):
+                    lines.append(f"{idx}) {item}")
+                lines.append("Скажите номер, чтобы открыть файл.")
+                return self._make_response("\n".join(lines), ok=True, items=results)
+
+            open_result = open_path(results[0])
+            reply = open_result.get("reply") or f"Открыл: {results[0]}"
+            if len(results) > 1:
+                reply += "\nЕсли нужен другой вариант, назовите его номер."
+            return self._make_response(reply, ok=open_result.get("ok", True), items=results)
+
+        if kind in {"open_web", "search_web"}:
+            try:
+                found = search_web(query)
+            except Exception as exc:  # pragma: no cover - зависит от сети
+                logger.exception("Ошибка веб-поиска по запросу %s: %s", query, exc)
+                return self._make_response(f"Не удалось выполнить веб-поиск: {exc}", ok=False)
+            if not found:
+                session_state.clear_results()
+                return self._make_response("Не удалось найти подходящие ссылки.", ok=False)
+            urls = [item[1] for item in found]
+            session_state.set_results(urls, task="", kind="web")
+            items = [f"{idx}) {title} — {url}" for idx, (title, url) in enumerate(found, 1)]
+            if kind == "search_web" and confidence < 0.6:
+                return self._make_response("\n".join(items), ok=True, items=urls)
+            first_title, first_url = found[0]
+            try:
+                opened_url = open_site(first_url)
+            except Exception as exc:  # pragma: no cover
+                logger.exception("Не удалось открыть ссылку %s: %s", first_url, exc)
+                return self._make_response(f"Не удалось открыть ссылку: {first_url}", ok=False)
+            reply_lines = [f"Открываю {first_title}: {opened_url}"]
+            if len(found) > 1:
+                reply_lines.append("Другие результаты:")
+                reply_lines.extend(items[1:])
+                reply_lines.append("Скажите номер, чтобы открыть другую ссылку.")
+            return self._make_response("\n".join(reply_lines), ok=True, items=urls)
+
         return None
 
     def detect_intent(self, text: str) -> Dict[str, str] | None:
@@ -561,6 +1105,10 @@ class IntentRouter:
         if file_result is not None:
             return file_result
 
+        inferred = self._handle_inferred_intent(message, session, session_state)
+        if inferred is not None:
+            return inferred
+
         intent = self.detect_intent(message)
         if not intent:
             logger.debug("Интент не распознан, обращение к LLM")
@@ -580,22 +1128,20 @@ class IntentRouter:
                 return self._make_response(result, ok=True)
 
             if intent_type == "search_file":
-                results = search_files(intent["query"])
+                results = search_local(
+                    intent["query"],
+                    max_results=25,
+                    whitelist=self.search_whitelist or None,
+                )
                 if not results:
                     session_state.clear_results()
                     return self._make_response("Ничего не найдено", ok=False)
-                normalized_paths: List[str] = []
-                for raw_path in results:
-                    expanded = os.path.expandvars(raw_path)
-                    expanded = os.path.expanduser(expanded)
-                    resolved = Path(expanded).resolve(strict=False)
-                    normalized_paths.append(str(resolved))
-                session_state.set_results(normalized_paths, task="search_files")
+                session_state.set_results(results, task="search_files", kind="file")
                 lines = ["Нашёл (выберите номер):"]
-                for idx, item in enumerate(normalized_paths, 1):
+                for idx, item in enumerate(results, 1):
                     lines.append(f"{idx}) {item}")
                 reply = "\n".join(lines)
-                return self._make_response(reply, ok=True, items=normalized_paths)
+                return self._make_response(reply, ok=True, items=results)
 
             if intent_type == "web_search":
                 result = self.web_automation.search_and_open(intent["query"])

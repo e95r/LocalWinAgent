@@ -14,6 +14,15 @@ from tools.apps import open_with_shell
 
 logger = logging.getLogger(__name__)
 
+
+def normalize_path(path: str | os.PathLike[str]) -> Path:
+    """Нормализовать путь с учётом переменных окружения и пользователя."""
+
+    expanded = os.path.expandvars(str(path))
+    expanded = os.path.expanduser(expanded)
+    return Path(expanded).resolve(strict=False)
+
+
 def get_desktop_path() -> Path:
     """Вернуть путь к рабочему столу пользователя."""
 
@@ -54,6 +63,12 @@ def _is_hidden_or_system(path: Path) -> bool:
         return False
 
 
+def is_path_hidden(path: Path) -> bool:
+    """Публичная обёртка для проверки скрытых путей."""
+
+    return _is_hidden_or_system(path)
+
+
 def _resolve_shortcut(target: Path) -> Path:
     """Разрешить путь ярлыка Windows."""
 
@@ -73,11 +88,10 @@ def _resolve_shortcut(target: Path) -> Path:
 def open_path(path: str) -> dict:
     """Открыть файл или каталог при помощи стандартного приложения ОС."""
 
-    expanded = os.path.expandvars(path)
-    expanded = os.path.expanduser(expanded)
-    target = Path(expanded).resolve(strict=False)
+    target = normalize_path(path)
     if not target.exists():
-        return {"ok": False, "path": str(target), "error": "Путь не существует"}
+        reply = f"Путь не найден: {target}"
+        return {"ok": False, "path": str(target), "error": "Путь не существует", "reply": reply}
 
     to_open = target
     if to_open.suffix.lower() == ".lnk":
@@ -88,12 +102,18 @@ def open_path(path: str) -> dict:
     except AttributeError:  # pragma: no cover - не Windows
         opened = open_with_shell(str(to_open))
         if opened is None:
-            return {"ok": False, "path": str(to_open), "error": "Не удалось открыть путь"}
-        return {"ok": True, "path": str(to_open.resolve(strict=False))}
+            reply = f"Не удалось открыть: {to_open}"
+            return {"ok": False, "path": str(to_open), "error": "Не удалось открыть путь", "reply": reply}
+        resolved = to_open.resolve(strict=False)
+        reply = f"Открыто: {resolved}"
+        return {"ok": True, "path": str(resolved), "reply": reply}
     except Exception as exc:  # pragma: no cover - системные ошибки Windows
-        return {"ok": False, "path": str(to_open), "error": str(exc)}
+        reply = f"Не удалось открыть: {to_open}"
+        return {"ok": False, "path": str(to_open), "error": str(exc), "reply": reply}
 
-    return {"ok": True, "path": str(to_open.resolve(strict=False))}
+    resolved = to_open.resolve(strict=False)
+    reply = f"Открыто: {resolved}"
+    return {"ok": True, "path": str(resolved), "reply": reply}
 
 
 class ConfirmationRequiredError(PermissionError):
@@ -115,15 +135,10 @@ class FileManager:
 
     @staticmethod
     def _prepare_path(path_str: str) -> Path:
-        expanded = os.path.expandvars(path_str)
-        expanded = os.path.expanduser(expanded)
-        return Path(expanded).resolve(strict=False)
+        return normalize_path(path_str)
 
     def _normalize(self, path: str | os.PathLike[str]) -> Path:
-        raw = str(path)
-        expanded = os.path.expandvars(raw)
-        expanded = os.path.expanduser(expanded)
-        return Path(expanded).resolve(strict=False)
+        return normalize_path(path)
 
     def _is_allowed(self, path: Path) -> bool:
         for allowed in self._allowed_paths:
@@ -254,7 +269,7 @@ class FileManager:
         items = [
             item.name
             for item in sorted(directory.iterdir(), key=lambda candidate: candidate.name.lower())
-            if not _is_hidden_or_system(item)
+            if not is_path_hidden(item)
         ]
         logger.info("Каталог %s содержит %d элементов", directory, len(items))
         return {"ok": True, "path": str(directory), "items": items}
