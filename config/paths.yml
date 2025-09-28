@@ -1,7 +1,7 @@
 # Путь по умолчанию и белый список директорий
 whitelist:
-  - "C:\\Users\\%USERNAME%\\Documents"
   - "C:\\Users\\%USERNAME%\\Desktop"
+  - "C:\\Users\\%USERNAME%\\Documents"
   - "C:\\Users\\%USERNAME%\\Downloads"
   - "C:\\Users\\%USERNAME%\\Pictures"
   - "C:\\Users\\%USERNAME%\\Videos"
