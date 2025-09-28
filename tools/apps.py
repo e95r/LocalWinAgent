@@ -1,4 +1,5 @@
-"""Управление приложениями Windows и вспомогательные методы запуска."""
+"""Запуск настольных приложений."""
+
 from __future__ import annotations
 
 import logging
@@ -6,151 +7,199 @@ import os
 import platform
 import subprocess
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
+
+try:  # pragma: no cover - rapidfuzz может быть недоступен в окружении
+    from rapidfuzz import process as fuzz_process  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    fuzz_process = None  # type: ignore
+
+import config
 
 logger = logging.getLogger(__name__)
 
-try:  # pragma: no cover - rapidfuzz может отсутствовать в окружении тестов
-    from rapidfuzz import fuzz  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover
-    from difflib import SequenceMatcher
 
-    class _FallbackFuzz:
-        @staticmethod
-        def partial_ratio(a: str, b: str) -> float:
-            return SequenceMatcher(None, a, b).ratio() * 100
-
-    fuzz = _FallbackFuzz()  # type: ignore
-
-
-DEFAULT_APPLICATIONS: Dict[str, Dict[str, str]] = {
-    "calc": {
-        "title": "Калькулятор",
-        "command": "calc.exe",
-        "process_name": "Calculator.exe",
-    }
-}
-
-DEFAULT_ALIASES: Dict[str, tuple[str, ...]] = {
-    "calc": ("калькулятор", "посчитать", "calculator", "calc"),
-    "notepad": ("блокнот", "заметки", "notepad", "текстовый редактор"),
-    "excel": ("excel", "ексель", "таблицы", "таблицу"),
-    "word": ("word", "ворд", "документы", "редактор"),
-    "chrome": ("chrome", "хром", "браузер", "google"),
-    "vscode": ("vscode", "vs code", "редактор кода", "код", "visual studio code"),
-}
-
-
-@dataclass
+@dataclass(slots=True)
 class Application:
     key: str
     title: str
     command: str
     process_name: str
+    aliases: Tuple[str, ...]
 
 
-class ApplicationManager:
-    """Запуск и завершение приложений."""
+DEFAULT_APPLICATIONS: Dict[str, Dict[str, object]] = {
+    "calc": {
+        "title": "Калькулятор",
+        "command": "calc.exe",
+        "process_name": "ApplicationFrameHost.exe",
+        "aliases": ("калькулятор", "посчитать", "calculator", "calc"),
+    },
+    "notepad": {
+        "title": "Блокнот",
+        "command": "notepad.exe",
+        "process_name": "notepad.exe",
+        "aliases": ("блокнот", "заметки", "notepad", "текстовый редактор"),
+    },
+    "word": {
+        "title": "Microsoft Word",
+        "command": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+        "process_name": "WINWORD.EXE",
+        "aliases": ("word", "ворд", "документ", "wordpad"),
+    },
+    "excel": {
+        "title": "Microsoft Excel",
+        "command": "C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE",
+        "process_name": "EXCEL.EXE",
+        "aliases": ("excel", "ексель", "таблица", "таблицу"),
+    },
+    "chrome": {
+        "title": "Google Chrome",
+        "command": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "process_name": "chrome.exe",
+        "aliases": ("chrome", "хром", "браузер", "google"),
+    },
+    "vscode": {
+        "title": "Visual Studio Code",
+        "command": "C:\\Users\\%USERNAME%\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+        "process_name": "Code.exe",
+        "aliases": ("vscode", "vs code", "visual studio code", "редактор кода", "код"),
+    },
+}
 
-    def __init__(self, applications: Dict[str, Dict[str, str]]):
-        merged: Dict[str, Dict[str, str]] = {**DEFAULT_APPLICATIONS, **applications}
-        self._apps: Dict[str, Application] = {
-            key: Application(key, data["title"], data["command"], data["process_name"]) for key, data in merged.items()
-        }
-        self._alias_map: Dict[str, str] = {}
-        self._build_alias_map()
+_APPLICATIONS: Dict[str, Application] = {}
+_ALIAS_MAP: Dict[str, str] = {}
 
-    def _build_alias_map(self) -> None:
-        alias_map: Dict[str, str] = {}
-        for key, app in self._apps.items():
-            alias_map[app.title.lower()] = key
-            alias_map[key.lower()] = key
-        for key, aliases in DEFAULT_ALIASES.items():
-            if key not in self._apps:
-                continue
-            for alias in aliases:
-                alias_map.setdefault(alias.lower(), key)
-        self._alias_map = alias_map
 
-    @property
-    def alias_map(self) -> Dict[str, str]:
-        return dict(self._alias_map)
+def _load_configured_apps() -> Dict[str, Dict[str, object]]:
+    try:
+        data = config.load_config("apps")
+    except Exception:  # pragma: no cover - конфиг может отсутствовать
+        return {}
+    apps = data.get("apps") if isinstance(data, dict) else None
+    return apps if isinstance(apps, dict) else {}
 
-    def resolve(self, name: str) -> Optional[str]:
-        lowered = name.strip().lower()
-        if not lowered:
-            return None
-        if lowered in self._alias_map:
-            return self._alias_map[lowered]
-        best_key: Optional[str] = None
-        best_score = 0.0
-        for alias, key in self._alias_map.items():
-            score = fuzz.partial_ratio(lowered, alias) / 100.0
-            if score > best_score:
-                best_score = score
-                best_key = key
-        if best_score >= 0.65:
-            return best_key
-        return None
 
-    def _ensure_windows(self) -> None:
-        if platform.system() != "Windows":
-            raise EnvironmentError("Операции с приложениями доступны только на Windows")
+def _expand_command(command: str) -> str:
+    return os.path.expandvars(command)
 
-    def launch(self, key: str) -> str:
-        self._ensure_windows()
-        resolved = self.resolve(key) or key
-        if resolved not in self._apps:
-            raise KeyError(f"Неизвестное приложение: {key}")
-        app = self._apps[resolved]
-        logger.info("Запуск приложения %s (%s)", app.title, app.command)
-        expanded_command = os.path.expandvars(app.command)
-        subprocess.Popen(expanded_command, shell=True)  # noqa: S603
-        return f"Приложение '{app.title}' запущено"
 
-    def close(self, key: str) -> str:
-        self._ensure_windows()
-        resolved = self.resolve(key) or key
-        if resolved not in self._apps:
-            raise KeyError(f"Неизвестное приложение: {key}")
-        app = self._apps[resolved]
-        logger.info("Закрытие приложения %s", app.title)
-        result = subprocess.run(
-            ["taskkill", "/IM", app.process_name, "/F"],  # noqa: S603,S607
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
+def _initialise() -> None:
+    global _APPLICATIONS, _ALIAS_MAP
+    merged: Dict[str, Dict[str, object]] = {**DEFAULT_APPLICATIONS, **_load_configured_apps()}
+    applications: Dict[str, Application] = {}
+    aliases: Dict[str, str] = {}
+    for key, raw in merged.items():
+        title = str(raw.get("title", key))
+        command = str(raw.get("command", key))
+        process_name = str(raw.get("process_name", ""))
+        alias_values: Iterable[str] = raw.get("aliases", ()) if isinstance(raw, dict) else ()
+        cleaned_aliases = [alias.strip().lower() for alias in alias_values if isinstance(alias, str) and alias.strip()]
+        default_aliases = DEFAULT_APPLICATIONS.get(key, {}).get("aliases", ())  # type: ignore[arg-type]
+        alias_set = {*(alias.lower() for alias in default_aliases or ()), *cleaned_aliases}
+        alias_set.add(key.lower())
+        alias_set.add(title.lower())
+        applications[key] = Application(
+            key=key,
+            title=title,
+            command=command,
+            process_name=process_name,
+            aliases=tuple(sorted(alias_set)),
         )
-        if result.returncode != 0:
-            logger.warning("taskkill вернул код %s: %s", result.returncode, result.stderr)
-            return f"Не удалось завершить {app.title}: {result.stderr.strip()}"
-        return f"Приложение '{app.title}' закрыто"
+        for alias in applications[key].aliases:
+            aliases[alias] = key
+    _APPLICATIONS = applications
+    _ALIAS_MAP = aliases
 
-    def list_known(self) -> Dict[str, Application]:
-        return self._apps
+
+_initialise()
+
+
+def reload() -> None:
+    _initialise()
+
+
+def get_known_apps() -> Dict[str, Application]:
+    return dict(_APPLICATIONS)
+
+
+def get_aliases() -> Dict[str, str]:
+    return dict(_ALIAS_MAP)
+
+
+def _match_alias(name: str) -> Optional[str]:
+    lowered = name.strip().lower()
+    if not lowered:
+        return None
+    if lowered in _ALIAS_MAP:
+        return _ALIAS_MAP[lowered]
+    if not fuzz_process:
+        return None
+    choices = list(_ALIAS_MAP.keys())
+    if not choices:
+        return None
+    best = fuzz_process.extractOne(lowered, choices)
+    if not best:
+        return None
+    alias, score, *_ = best
+    return _ALIAS_MAP.get(alias) if score >= 75 else None
+
+
+def launch(name_or_alias: str) -> dict:
+    key = _match_alias(name_or_alias)
+    if not key:
+        message = f"Не знаю, как открыть '{name_or_alias}'."
+        return {"ok": False, "message": message}
+    app = _APPLICATIONS.get(key)
+    if not app:
+        message = f"Не удалось найти маппинг приложения '{name_or_alias}'."
+        return {"ok": False, "message": message}
+    command = _expand_command(app.command)
+    system = platform.system()
+    if system == "Windows":
+        try:
+            subprocess.Popen(command, shell=False)  # noqa: S603
+        except FileNotFoundError:
+            return {"ok": False, "message": f"Файл программы не найден: {command}"}
+        except Exception as exc:  # pragma: no cover - системные ошибки Windows
+            return {"ok": False, "message": str(exc)}
+    else:  # pragma: no cover - тестовые окружения
+        logger.info("Имитируем запуск '%s' на платформе %s", app.title, system)
+    return {"ok": True, "message": f"Приложение '{app.title}' запущено", "command": command}
+
+
+def close(name_or_alias: str) -> dict:
+    key = _match_alias(name_or_alias)
+    if not key:
+        return {"ok": False, "message": f"Не знаю, как закрыть '{name_or_alias}'"}
+    app = _APPLICATIONS.get(key)
+    if not app or not app.process_name:
+        return {"ok": False, "message": f"Нет информации о процессе для '{name_or_alias}'"}
+    system = platform.system()
+    if system != "Windows":  # pragma: no cover - на тестовых ОС имитируем поведение
+        logger.info("Имитируем закрытие '%s'", app.title)
+        return {"ok": True, "message": f"Закрытие '{app.title}' инициировано"}
+    result = subprocess.run(  # noqa: S603
+        ["taskkill", "/IM", app.process_name, "/F"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+    )
+    if result.returncode != 0:
+        return {"ok": False, "message": result.stderr.strip() or "Не удалось завершить процесс"}
+    return {"ok": True, "message": f"Приложение '{app.title}' закрыто"}
 
 
 def open_with_shell(path: str) -> Optional[subprocess.Popen[bytes]]:
-    """Открыть путь с помощью системных средств на POSIX-платформах.
-
-    На Windows следует использовать :func:`os.startfile`, поэтому эта функция
-    применяется только в средах Linux/macOS. Возвращает объект процесса или
-    ``None``, если команда запуска не поддерживается.
-    """
-
     system = platform.system()
     if system == "Darwin":
         command = ["open", path]
     elif system == "Linux":
         command = ["xdg-open", path]
     else:
-        logger.debug("open_with_shell не поддерживает платформу %s", system)
         return None
-
-    logger.info("Открытие пути через оболочку: %s", command)
     try:
-        process = subprocess.Popen(command)  # noqa: S603
-    except FileNotFoundError:
-        logger.error("Команда для открытия пути не найдена: %s", command[0])
+        return subprocess.Popen(command)  # noqa: S603
+    except FileNotFoundError:  # pragma: no cover - редкий случай
         return None
-    return process
