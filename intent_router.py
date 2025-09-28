@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
-from dataclasses import dataclass
-from typing import Callable, Dict, Optional
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Dict, List, Literal, Optional
 
 try:  # pragma: no cover - rapidfuzz может отсутствовать в тестовой среде
     from rapidfuzz import fuzz  # type: ignore
@@ -35,7 +38,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from config import load_config
 from tools.apps import ApplicationManager
-from tools.files import ConfirmationRequiredError, FileManager, get_desktop_path
+from tools.files import ConfirmationRequiredError, FileManager, get_desktop_path, open_path
 from tools.search import EverythingNotInstalledError, search_files
 from tools.web import WebAutomation
 
@@ -53,6 +56,28 @@ class AgentSession:
     auto_confirm: bool = False
     model: str = "llama3.1:8b"
     pending: Optional[PendingAction] = None
+
+
+@dataclass
+class SessionState:
+    last_results: List[str] = field(default_factory=list)
+    last_task: Literal["search_files", ""] = ""
+    last_updated: float = field(default_factory=time.time)
+
+    def set_results(self, results: List[str], task: Literal["search_files", ""] = "search_files") -> None:
+        self.last_results = list(results)
+        self.last_task = task if results else ""
+        self.last_updated = time.time()
+
+    def get_results(self) -> List[str]:
+        if self.last_results and time.time() - self.last_updated > 900:
+            self.clear_results()
+        return list(self.last_results)
+
+    def clear_results(self) -> None:
+        self.last_results = []
+        self.last_task = ""
+        self.last_updated = time.time()
 
 
 class LLMClient:
@@ -101,6 +126,9 @@ class IntentRouter:
     COPY_RE = re.compile(r"^(?:скопируй|скопировать)\s+(.+?)\s+в\s+(.+)$", re.IGNORECASE)
     DELETE_RE = re.compile(r"^(?:удали|удалить)\s+(.+)$", re.IGNORECASE)
     LIST_RE = re.compile(r"^(?:покажи|список|list)\s+(?:каталог|папку)\s+(.+)$", re.IGNORECASE)
+    RE_OPEN_PRONOUN = re.compile(r"^(открой|покажи)\s+(его|её|его\s+пожалуйста|этот|это)$", re.IGNORECASE)
+    RE_OPEN_INDEX = re.compile(r"^(открой|покажи)\s+(\d+|первый|последний)$", re.IGNORECASE)
+    RE_RESET_CTX = re.compile(r"^(сбрось\s+контекст|очисти\s+память)$", re.IGNORECASE)
 
     APP_KEYWORDS: Dict[str, tuple[str, ...]] = {
         "notepad": ("блокнот", "текстовый редактор", "notepad"),
@@ -126,6 +154,23 @@ class IntentRouter:
         )
         self.llm_client = LLMClient()
         self.download_dir = paths_cfg.get("default_downloads")
+
+    @staticmethod
+    def _make_response(
+        reply: str,
+        *,
+        ok: bool,
+        requires_confirmation: bool = False,
+        items: Optional[List[str]] = None,
+    ) -> Dict[str, object]:
+        data: Dict[str, object] = {
+            "ok": ok,
+            "reply": reply,
+            "requires_confirmation": requires_confirmation,
+        }
+        if items is not None:
+            data["items"] = items
+        return data
 
     @staticmethod
     def _clean_path(text: str) -> str:
@@ -170,7 +215,7 @@ class IntentRouter:
         action_name: str,
         performer: Callable[[bool], dict],
         formatter: Callable[[dict], str],
-    ) -> Dict[str, str]:
+    ) -> Dict[str, object]:
         confirmed_flag = session.auto_confirm
         try:
             result = performer(confirmed_flag)
@@ -178,7 +223,12 @@ class IntentRouter:
             normalized = self.file_manager._normalize(path)
             if session.auto_confirm:
                 result = performer(True)
-                return {"reply": formatter(result), "requires_confirmation": False}
+                ok_flag = bool(result.get("ok", True))
+                return self._make_response(
+                    formatter(result),
+                    ok=ok_flag,
+                    requires_confirmation=False,
+                )
             description = f"{action_name}: {normalized}"
 
             def _callback(_: bool) -> str:
@@ -186,16 +236,18 @@ class IntentRouter:
                 return formatter(data)
 
             session.pending = PendingAction(description=description, callback=_callback)
-            return {
-                "reply": f"Требуется подтверждение для пути: {normalized}. Скажите 'да' для подтверждения.",
-                "requires_confirmation": True,
-            }
+            return self._make_response(
+                f"Требуется подтверждение для пути: {normalized}. Скажите 'да' для подтверждения.",
+                ok=False,
+                requires_confirmation=True,
+            )
         except Exception as exc:
             logger.exception("Ошибка при выполнении операции %s: %s", action_name, exc)
-            return {"reply": f"Ошибка: {exc}", "requires_confirmation": False}
-        return {"reply": formatter(result), "requires_confirmation": False}
+            return self._make_response(f"Ошибка: {exc}", ok=False)
+        ok_flag = bool(result.get("ok", True))
+        return self._make_response(formatter(result), ok=ok_flag)
 
-    def _handle_create(self, message: str, session: AgentSession) -> Optional[Dict[str, str]]:
+    def _handle_create(self, message: str, session: AgentSession) -> Optional[Dict[str, object]]:
         match = self.CREATE_RE.match(message)
         if not match:
             return None
@@ -210,7 +262,7 @@ class IntentRouter:
 
         return self._execute_with_confirmation(session, raw_path, "создание файла", _perform, _format)
 
-    def _handle_write(self, message: str, session: AgentSession) -> Optional[Dict[str, str]]:
+    def _handle_write(self, message: str, session: AgentSession) -> Optional[Dict[str, object]]:
         match = self.WRITE_RE.match(message)
         if not match:
             return None
@@ -226,7 +278,7 @@ class IntentRouter:
 
         return self._execute_with_confirmation(session, raw_path, "запись файла", _perform, _format)
 
-    def _handle_append(self, message: str, session: AgentSession) -> Optional[Dict[str, str]]:
+    def _handle_append(self, message: str, session: AgentSession) -> Optional[Dict[str, object]]:
         match = self.APPEND_RE.match(message)
         if not match:
             return None
@@ -242,7 +294,7 @@ class IntentRouter:
 
         return self._execute_with_confirmation(session, raw_path, "добавление в файл", _perform, _format)
 
-    def _handle_open(self, message: str, session: AgentSession) -> Optional[Dict[str, str]]:
+    def _handle_open(self, message: str, session: AgentSession) -> Optional[Dict[str, object]]:
         match = self.OPEN_RE.match(message)
         if not match:
             return None
@@ -251,13 +303,13 @@ class IntentRouter:
             result = self.file_manager.open_path(raw_path)
         except Exception as exc:
             logger.exception("Ошибка открытия пути %s: %s", raw_path, exc)
-            return {"reply": f"Ошибка: {exc}", "requires_confirmation": False}
+            return self._make_response(f"Ошибка: {exc}", ok=False)
         if not result.get("ok", False):
             error = result.get("error", "Не удалось открыть путь")
-            return {"reply": f"Ошибка: {error}", "requires_confirmation": False}
-        return {"reply": f"Открыто: {result['path']}", "requires_confirmation": False}
+            return self._make_response(f"Ошибка: {error}", ok=False)
+        return self._make_response(f"Открыто: {result['path']}", ok=True)
 
-    def _handle_move(self, message: str, session: AgentSession) -> Optional[Dict[str, str]]:
+    def _handle_move(self, message: str, session: AgentSession) -> Optional[Dict[str, object]]:
         match = self.MOVE_RE.match(message)
         if not match:
             return None
@@ -272,7 +324,7 @@ class IntentRouter:
 
         return self._execute_with_confirmation(session, dst, "перемещение", _perform, _format)
 
-    def _handle_copy(self, message: str, session: AgentSession) -> Optional[Dict[str, str]]:
+    def _handle_copy(self, message: str, session: AgentSession) -> Optional[Dict[str, object]]:
         match = self.COPY_RE.match(message)
         if not match:
             return None
@@ -287,7 +339,7 @@ class IntentRouter:
 
         return self._execute_with_confirmation(session, dst, "копирование", _perform, _format)
 
-    def _handle_delete(self, message: str, session: AgentSession) -> Optional[Dict[str, str]]:
+    def _handle_delete(self, message: str, session: AgentSession) -> Optional[Dict[str, object]]:
         match = self.DELETE_RE.match(message)
         if not match:
             return None
@@ -301,7 +353,7 @@ class IntentRouter:
 
         return self._execute_with_confirmation(session, raw_path, "удаление", _perform, _format)
 
-    def _handle_list(self, message: str, session: AgentSession) -> Optional[Dict[str, str]]:
+    def _handle_list(self, message: str, session: AgentSession) -> Optional[Dict[str, object]]:
         match = self.LIST_RE.match(message)
         if not match:
             return None
@@ -316,7 +368,62 @@ class IntentRouter:
 
         return self._execute_with_confirmation(session, raw_path, "просмотр каталога", _perform, _format)
 
-    def _handle_file_commands(self, message: str, session: AgentSession) -> Optional[Dict[str, str]]:
+    def _handle_context_commands(
+        self, message: str, session_state: SessionState
+    ) -> Optional[Dict[str, object]]:
+        normalized = message.strip().lower()
+        if self.RE_RESET_CTX.match(normalized):
+            session_state.clear_results()
+            return self._make_response("Контекст очищен.", ok=True)
+
+        match_pronoun = self.RE_OPEN_PRONOUN.match(normalized)
+        match_index = self.RE_OPEN_INDEX.match(normalized)
+        if not match_pronoun and not match_index:
+            return None
+
+        results = session_state.get_results()
+        if not results:
+            return self._make_response(
+                "Нет сохранённых результатов поиска. Сначала скажите: найди файл …",
+                ok=False,
+            )
+
+        if match_index:
+            raw_index = match_index.group(2).strip().lower()
+            if raw_index == "первый":
+                index = 1
+            elif raw_index == "последний":
+                index = len(results)
+            else:
+                try:
+                    index = int(raw_index)
+                except ValueError:
+                    return self._make_response("Уточните номер.", ok=False)
+        else:
+            index = 1
+
+        if index < 1 or index > len(results):
+            return self._make_response(
+                f"Выберите число от 1 до {len(results)}.",
+                ok=False,
+            )
+
+        target = results[index - 1]
+        open_result = open_path(target)
+        session_state.last_updated = time.time()
+        if not open_result.get("ok"):
+            error = open_result.get("error", "Не удалось открыть путь")
+            return self._make_response(
+                f"Не удалось открыть: {open_result.get('path', target)} (ok=False, ошибка: {error})",
+                ok=False,
+            )
+
+        reply = f"Открыл: {open_result['path']} (ok=True)"
+        if match_pronoun and len(results) > 1:
+            reply += "\nЕсли нужен другой результат, уточните номер."
+        return self._make_response(reply, ok=True)
+
+    def _handle_file_commands(self, message: str, session: AgentSession) -> Optional[Dict[str, object]]:
         for handler in (
             self._handle_create,
             self._handle_write,
@@ -377,14 +484,21 @@ class IntentRouter:
 
         return None
 
-    def handle_message(self, message: str, session: AgentSession, *, force_confirm: bool = False) -> Dict[str, str]:
+    def handle_message(
+        self,
+        message: str,
+        session: AgentSession,
+        session_state: SessionState,
+        *,
+        force_confirm: bool = False,
+    ) -> Dict[str, object]:
         if force_confirm and session.pending:
             logger.debug("Принудительное подтверждение действия %s", session.pending.description)
             try:
                 result = session.pending.callback(True)
             finally:
                 session.pending = None
-            return {"reply": result, "requires_confirmation": False}
+            return self._make_response(result, ok=True)
 
         if session.pending:
             if self._is_positive(message):
@@ -393,29 +507,39 @@ class IntentRouter:
                 except Exception as exc:  # pragma: no cover - неожиданные ошибки при выполнении колбэка
                     logger.exception("Ошибка в подтверждённом действии: %s", exc)
                     reply = f"Ошибка: {exc}"
+                    return_value = self._make_response(reply, ok=False)
                 else:
                     reply = result
+                    return_value = self._make_response(reply, ok=True)
                 session.pending = None
-                return {"reply": reply, "requires_confirmation": False}
+                return return_value
             if self._is_negative(message):
                 description = session.pending.description
                 session.pending = None
-                return {"reply": f"Отменено: {description}", "requires_confirmation": False}
-            return {"reply": "Пожалуйста, ответьте 'да' или 'нет' для подтверждения.", "requires_confirmation": True}
+                return self._make_response(f"Отменено: {description}", ok=False)
+            return self._make_response(
+                "Пожалуйста, ответьте 'да' или 'нет' для подтверждения.",
+                ok=False,
+                requires_confirmation=True,
+            )
 
         message = message.strip()
         if not message:
-            return {"reply": "Пустой запрос", "requires_confirmation": False}
+            return self._make_response("Пустой запрос", ok=False)
+
+        if session_state.last_results and time.time() - session_state.last_updated > 900:
+            session_state.clear_results()
+
+        context_response = self._handle_context_commands(message, session_state)
+        if context_response is not None:
+            return context_response
 
         normalized_lower = message.lower().strip()
         normalized_lower = normalized_lower.rstrip(" ?")
 
         if normalized_lower == "напиши путь до рабочего стола":
             desktop_path = get_desktop_path().resolve(strict=False)
-            return {
-                "reply": f"Рабочий стол: {desktop_path}",
-                "requires_confirmation": False,
-            }
+            return self._make_response(f"Рабочий стол: {desktop_path}", ok=True)
 
         if normalized_lower == "какие файлы есть на рабочем столе":
             desktop_path = get_desktop_path().resolve(strict=False)
@@ -423,13 +547,15 @@ class IntentRouter:
                 data = self.file_manager.list_directory(str(desktop_path), confirmed=True)
             except FileNotFoundError:
                 reply = f"Рабочий стол не найден: {desktop_path}"
+                return self._make_response(reply, ok=False)
             except Exception as exc:  # pragma: no cover - защита от неожиданных ошибок
                 logger.exception("Ошибка при получении списка рабочего стола: %s", exc)
                 reply = f"Ошибка: {exc}"
+                return self._make_response(reply, ok=False)
             else:
                 items = ", ".join(data.get("items", [])) or "(пусто)"
                 reply = f"Рабочий стол ({desktop_path}): {items}"
-            return {"reply": reply, "requires_confirmation": False}
+                return self._make_response(reply, ok=True, items=data.get("items"))
 
         file_result = self._handle_file_commands(message, session)
         if file_result is not None:
@@ -438,7 +564,8 @@ class IntentRouter:
         intent = self.detect_intent(message)
         if not intent:
             logger.debug("Интент не распознан, обращение к LLM")
-            return {"reply": self.llm_client.chat(message, model=session.model), "requires_confirmation": False}
+            reply = self.llm_client.chat(message, model=session.model)
+            return self._make_response(reply, ok=True)
 
         intent_type = intent["type"]
         logger.info("Обнаружен интент: %s", intent_type)
@@ -446,22 +573,33 @@ class IntentRouter:
         try:
             if intent_type == "open_app":
                 result = self.app_manager.launch(intent["app"])
-                return {"reply": result, "requires_confirmation": False}
+                return self._make_response(result, ok=True)
 
             if intent_type == "close_app":
                 result = self.app_manager.close(intent["app"])
-                return {"reply": result, "requires_confirmation": False}
+                return self._make_response(result, ok=True)
 
             if intent_type == "search_file":
                 results = search_files(intent["query"])
                 if not results:
-                    return {"reply": "Ничего не найдено", "requires_confirmation": False}
-                joined = "\n".join(results[:10])
-                return {"reply": f"Найдены пути:\n{joined}", "requires_confirmation": False}
+                    session_state.clear_results()
+                    return self._make_response("Ничего не найдено", ok=False)
+                normalized_paths: List[str] = []
+                for raw_path in results:
+                    expanded = os.path.expandvars(raw_path)
+                    expanded = os.path.expanduser(expanded)
+                    resolved = Path(expanded).resolve(strict=False)
+                    normalized_paths.append(str(resolved))
+                session_state.set_results(normalized_paths, task="search_files")
+                lines = ["Нашёл (выберите номер):"]
+                for idx, item in enumerate(normalized_paths, 1):
+                    lines.append(f"{idx}) {item}")
+                reply = "\n".join(lines)
+                return self._make_response(reply, ok=True, items=normalized_paths)
 
             if intent_type == "web_search":
                 result = self.web_automation.search_and_open(intent["query"])
-                return {"reply": result, "requires_confirmation": False}
+                return self._make_response(result, ok=True)
 
             if intent_type == "read_file":
                 path = intent["path"]
@@ -478,34 +616,36 @@ class IntentRouter:
                     content = self.file_manager.read_text(path, confirmed=False)
                 except ConfirmationRequiredError:
                     if session.auto_confirm:
-                        return {"reply": _action(), "requires_confirmation": False}
+                        return self._make_response(_action(), ok=True)
                     session.pending = PendingAction(description=description, callback=lambda _: _action())
-                    return {
-                        "reply": f"Нужно подтверждение: {description}. Ответьте 'да', чтобы продолжить.",
-                        "requires_confirmation": True,
-                    }
+                    return self._make_response(
+                        f"Нужно подтверждение: {description}. Ответьте 'да', чтобы продолжить.",
+                        ok=False,
+                        requires_confirmation=True,
+                    )
                 else:
                     preview = content[:500]
                     if len(content) > 500:
                         preview += "..."
-                    return {"reply": f"Содержимое файла:\n{preview}", "requires_confirmation": False}
+                    return self._make_response(f"Содержимое файла:\n{preview}", ok=True)
 
             if intent_type == "switch_model":
                 session.model = intent["model"]
-                return {"reply": f"Использую модель {session.model}", "requires_confirmation": False}
+                return self._make_response(f"Использую модель {session.model}", ok=True)
 
         except EverythingNotInstalledError as exc:
-            return {"reply": str(exc), "requires_confirmation": False}
+            return self._make_response(str(exc), ok=False)
         except ConfirmationRequiredError as exc:
             description = exc.args[0]
             session.pending = PendingAction(description=description, callback=lambda _: description)
-            return {
-                "reply": f"Требуется подтверждение: {description}. Ответьте 'да', чтобы продолжить.",
-                "requires_confirmation": True,
-            }
+            return self._make_response(
+                f"Требуется подтверждение: {description}. Ответьте 'да', чтобы продолжить.",
+                ok=False,
+                requires_confirmation=True,
+            )
         except Exception as exc:  # pragma: no cover - защита от неожиданных ошибок
             logger.exception("Ошибка при обработке интента: %s", exc)
-            return {"reply": f"Ошибка: {exc}", "requires_confirmation": False}
+            return self._make_response(f"Ошибка: {exc}", ok=False)
 
         logger.debug("Интент %s не потребовал действий", intent_type)
-        return {"reply": "Команда обработана", "requires_confirmation": False}
+        return self._make_response("Команда обработана", ok=True)

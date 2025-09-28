@@ -15,7 +15,7 @@ except ModuleNotFoundError:  # pragma: no cover
     class RichHandler(logging.StreamHandler):
         pass
 
-from intent_router import AgentSession, IntentRouter
+from intent_router import AgentSession, IntentRouter, SessionState
 
 LOG_PATH = Path("logs/agent.log")
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -49,20 +49,26 @@ intent_router = IntentRouter()
 class ConnectionManager:
     def __init__(self) -> None:
         self.sessions: Dict[int, AgentSession] = {}
+        self.session_states: Dict[int, SessionState] = {}
 
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
         self.sessions[id(websocket)] = AgentSession()
+        self.session_states[id(websocket)] = SessionState()
         logger.info("Новое подключение WebSocket: %s", id(websocket))
 
     def disconnect(self, websocket: WebSocket) -> None:
         session = self.sessions.pop(id(websocket), None)
+        self.session_states.pop(id(websocket), None)
         logger.info("Отключение WebSocket %s", id(websocket))
         if session and session.pending:
             logger.debug("Сброс ожидающего действия для %s", id(websocket))
 
     def get_session(self, websocket: WebSocket) -> AgentSession:
         return self.sessions[id(websocket)]
+
+    def get_state(self, websocket: WebSocket) -> SessionState:
+        return self.session_states[id(websocket)]
 
 
 manager = ConnectionManager()
@@ -82,6 +88,7 @@ async def chat_page() -> FileResponse:
 async def websocket_endpoint(websocket: WebSocket) -> None:
     await manager.connect(websocket)
     session = manager.get_session(websocket)
+    state = manager.get_state(websocket)
     try:
         while True:
             data = await websocket.receive_json()
@@ -95,14 +102,21 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 session.model = model
 
             logger.info("Сообщение от клиента: %s", message)
-            response = intent_router.handle_message(message, session, force_confirm=confirm)
-            await websocket.send_json(
-                {
-                    "response": response["reply"],
-                    "requires_confirmation": response["requires_confirmation"],
-                    "model": session.model,
-                }
+            response = intent_router.handle_message(
+                message,
+                session,
+                state,
+                force_confirm=confirm,
             )
+            payload = {
+                "response": response["reply"],
+                "requires_confirmation": response["requires_confirmation"],
+                "ok": response.get("ok", True),
+                "model": session.model,
+            }
+            if "items" in response:
+                payload["items"] = response["items"]
+            await websocket.send_json(payload)
     except WebSocketDisconnect:
         manager.disconnect(websocket)
         logger.info("WebSocket %s отключен", id(websocket))

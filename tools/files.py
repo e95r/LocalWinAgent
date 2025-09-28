@@ -70,29 +70,29 @@ def _resolve_shortcut(target: Path) -> Path:
     return resolved.resolve(strict=False)
 
 
-def open_path(path: str | os.PathLike[str]) -> dict:
-    """Открыть файл или каталог и вернуть информацию о результате."""
+def open_path(path: str) -> dict:
+    """Открыть файл или каталог при помощи стандартного приложения ОС."""
 
-    target = Path(path).expanduser()
-    target = target.resolve(strict=False)
+    expanded = os.path.expandvars(path)
+    expanded = os.path.expanduser(expanded)
+    target = Path(expanded).resolve(strict=False)
     if not target.exists():
-        return {"ok": False, "path": str(target), "error": "Путь не найден"}
+        return {"ok": False, "path": str(target), "error": "Путь не существует"}
 
     to_open = target
     if to_open.suffix.lower() == ".lnk":
         to_open = _resolve_shortcut(to_open)
 
-    system = platform.system()
-    if system == "Windows" and hasattr(os, "startfile"):
-        try:
-            os.startfile(str(to_open))  # type: ignore[attr-defined]
-        except Exception as exc:  # pragma: no cover - системные ошибки
-            return {"ok": False, "path": str(to_open), "error": str(exc)}
+    try:
+        os.startfile(str(to_open))  # type: ignore[attr-defined]
+    except AttributeError:  # pragma: no cover - не Windows
+        opened = open_with_shell(str(to_open))
+        if opened is None:
+            return {"ok": False, "path": str(to_open), "error": "Не удалось открыть путь"}
         return {"ok": True, "path": str(to_open.resolve(strict=False))}
+    except Exception as exc:  # pragma: no cover - системные ошибки Windows
+        return {"ok": False, "path": str(to_open), "error": str(exc)}
 
-    opened = open_with_shell(str(to_open))
-    if opened is None:
-        return {"ok": False, "path": str(to_open), "error": "Не удалось открыть путь"}
     return {"ok": True, "path": str(to_open.resolve(strict=False))}
 
 

@@ -23,7 +23,7 @@ except ModuleNotFoundError:  # pragma: no cover
         def __str__(self) -> str:
             return f"{self.title or ''}\n{self.renderable}"
 
-from intent_router import AgentSession, IntentRouter
+from intent_router import AgentSession, IntentRouter, SessionState
 
 console = Console()
 logger = logging.getLogger("localwinagent.cli")
@@ -39,6 +39,7 @@ def run_cli() -> None:
     logging.basicConfig(level="INFO")
     router = IntentRouter()
     session = AgentSession()
+    state = SessionState()
     history = FileHistory(str(HISTORY_PATH))
     completer = WordCompleter(
         [
@@ -89,16 +90,16 @@ def run_cli() -> None:
                 console.print("[red]Укажите модель: :model llama3.1:8b[/red]")
             continue
 
-        response = router.handle_message(stripped, session)
+        response = router.handle_message(stripped, session, state)
         _print_response(response["reply"])
 
         if response["requires_confirmation"]:
             confirm = prompt_session.prompt("Подтвердить действие? (y/n): ")
             if confirm.strip().lower().startswith("y"):
-                confirmed = router.handle_message("да", session, force_confirm=True)
+                confirmed = router.handle_message("да", session, state, force_confirm=True)
                 _print_response(confirmed["reply"])
             else:
-                router.handle_message("нет", session)
+                router.handle_message("нет", session, state)
                 console.print("[yellow]Действие отменено[/yellow]")
 
 
