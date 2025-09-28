@@ -187,3 +187,31 @@ def test_refresh_apps_intent(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert response.get("ok") is True
     assert "42" in response.get("reply", "")
+
+
+def test_resolve_lnk_uses_both_casings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    target = tmp_path / "MyApp.exe"
+    target.write_text("run")
+
+    class FakeShortcut:
+        Targetpath = str(target)
+        Arguments = "--mode"
+
+    class FakeShell:
+        def CreateShortcut(self, _path: str) -> FakeShortcut:
+            return FakeShortcut()
+
+    class FakeClientModule:
+        def Dispatch(self, _name: str) -> FakeShell:
+            return FakeShell()
+
+    fake_module = SimpleNamespace(client=FakeClientModule())
+    monkeypatch.setitem(sys.modules, "win32com", fake_module)
+    monkeypatch.setitem(sys.modules, "win32com.client", FakeClientModule())
+
+    shortcut_path = tmp_path / "Sample.lnk"
+    shortcut_path.write_text("lnk")
+
+    result = AppIndexer.resolve_lnk(shortcut_path)
+
+    assert result == (str(target), "--mode")
