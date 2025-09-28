@@ -9,7 +9,7 @@ from typing import Dict
 import pytest
 
 import config
-from intent_router import AgentSession, IntentRouter
+from intent_router import AgentSession, IntentRouter, SessionState
 
 
 @pytest.fixture()
@@ -52,25 +52,26 @@ def test_full_file_flow(router_with_tmp: Dict[str, object]) -> None:
     router: IntentRouter = router_with_tmp["router"]  # type: ignore[assignment]
     allow_dir: Path = router_with_tmp["allow_dir"]  # type: ignore[assignment]
     session = AgentSession(auto_confirm=True)
+    state = SessionState()
 
-    response_create = router.handle_message("создай файл test.txt", session)
+    response_create = router.handle_message("создай файл test.txt", session, state)
     assert "exists=True" in response_create["reply"]
     full_path = allow_dir / "test.txt"
     assert full_path.exists()
 
-    response_write = router.handle_message("запиши в test.txt: привет", session)
+    response_write = router.handle_message("запиши в test.txt: привет", session, state)
     assert "exists=True" in response_write["reply"]
     assert full_path.read_text(encoding="utf-8") == "привет"
 
-    response_append = router.handle_message("добавь к test.txt: ещё", session)
+    response_append = router.handle_message("добавь к test.txt: ещё", session, state)
     assert "exists=True" in response_append["reply"]
     assert full_path.read_text(encoding="utf-8") == "приветещё"
 
-    response_open = router.handle_message("открой файл test.txt", session)
+    response_open = router.handle_message("открой файл test.txt", session, state)
     assert response_open["reply"].startswith("Открыто: ")
     assert str(full_path.resolve()) in response_open["reply"]
 
-    response_list = router.handle_message("покажи каталог .", session)
+    response_list = router.handle_message("покажи каталог .", session, state)
     assert "Каталог:" in response_list["reply"]
     assert "test.txt" in response_list["reply"]
 
@@ -86,7 +87,8 @@ def test_router_desktop_listing(router_with_tmp: Dict[str, object]) -> None:
     monkeypatch.setattr("intent_router.get_desktop_path", lambda: allow_dir)
 
     session = AgentSession(auto_confirm=True)
-    response = router.handle_message("Какие файлы есть на рабочем столе?", session)
+    state = SessionState()
+    response = router.handle_message("Какие файлы есть на рабочем столе?", session, state)
     assert "Рабочий стол" in response["reply"]
     assert "visible.txt" in response["reply"]
     assert "desktop.ini" not in response["reply"]
@@ -100,5 +102,6 @@ def test_router_desktop_path(router_with_tmp: Dict[str, object]) -> None:
     monkeypatch.setattr("intent_router.get_desktop_path", lambda: allow_dir)
 
     session = AgentSession(auto_confirm=True)
-    response = router.handle_message("напиши путь до рабочего стола", session)
+    state = SessionState()
+    response = router.handle_message("напиши путь до рабочего стола", session, state)
     assert str(allow_dir.resolve(strict=False)) in response["reply"]
