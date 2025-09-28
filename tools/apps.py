@@ -1,4 +1,4 @@
-"""Управление приложениями Windows."""
+"""Управление приложениями Windows и вспомогательные методы запуска."""
 from __future__ import annotations
 
 import logging
@@ -6,7 +6,7 @@ import os
 import platform
 import subprocess
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -60,3 +60,29 @@ class ApplicationManager:
 
     def list_known(self) -> Dict[str, Application]:
         return self._apps
+
+
+def open_with_shell(path: str) -> Optional[subprocess.Popen[bytes]]:
+    """Открыть путь с помощью системных средств на POSIX-платформах.
+
+    На Windows следует использовать :func:`os.startfile`, поэтому эта функция
+    применяется только в средах Linux/macOS. Возвращает объект процесса или
+    ``None``, если команда запуска не поддерживается.
+    """
+
+    system = platform.system()
+    if system == "Darwin":
+        command = ["open", path]
+    elif system == "Linux":
+        command = ["xdg-open", path]
+    else:
+        logger.debug("open_with_shell не поддерживает платформу %s", system)
+        return None
+
+    logger.info("Открытие пути через оболочку: %s", command)
+    try:
+        process = subprocess.Popen(command)  # noqa: S603
+    except FileNotFoundError:
+        logger.error("Команда для открытия пути не найдена: %s", command[0])
+        return None
+    return process

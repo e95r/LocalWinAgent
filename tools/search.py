@@ -18,23 +18,23 @@ class EverythingNotInstalledError(RuntimeError):
 
 
 def _call_everything(query: str, max_results: int = 50) -> List[str]:
-    # пробуем с -max-results, если упадёт — используем -n
-    command = [EVERYTHING_CLI, query, f"-max-results={max_results}", "-full-path"]
+    command = [EVERYTHING_CLI, query, "-n", str(max_results), "-full-path"]
+    logger.debug("Выполнение команды Everything: %s", command)
     try:
-        completed = subprocess.run(command, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError:
-        # fallback на старый синтаксис
-        command = [EVERYTHING_CLI, query, f"-n", str(max_results), "-full-path"]
-        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+    except FileNotFoundError as exc:
+        raise
 
-    logger.debug("Выполнение команды: %s", command)
-    completed = subprocess.run(
-        command,
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
+    if completed.returncode != 0:
+        logger.warning("Everything вернул код %s", completed.returncode)
+        return []
+
     return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
 
 
