@@ -1,6 +1,8 @@
 """Загрузка конфигураций проекта LocalWinAgent."""
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 from typing import Any, Dict
 
@@ -87,6 +89,27 @@ except ModuleNotFoundError:  # pragma: no cover
     yaml = _DummyYaml()  # type: ignore
 
 _CONFIG_CACHE: Dict[str, Dict[str, Any]] = {}
+_PERCENT_VAR_RE = re.compile(r"%([^%]+)%")
+
+
+def _expand_env(value: Any) -> Any:
+    """Рекурсивно раскрыть переменные окружения и тильду в строках."""
+
+    if isinstance(value, str):
+        expanded = os.path.expandvars(value)
+        expanded = os.path.expanduser(expanded)
+
+        def _replace_percent(match: re.Match[str]) -> str:
+            var_name = match.group(1)
+            return os.environ.get(var_name, match.group(0))
+
+        expanded = _PERCENT_VAR_RE.sub(_replace_percent, expanded)
+        return expanded
+    if isinstance(value, dict):
+        return {key: _expand_env(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_env(item) for item in value]
+    return value
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
@@ -103,7 +126,7 @@ def load_config(name: str) -> Dict[str, Any]:
     if not file_path.exists():
         raise FileNotFoundError(f"Не найден файл конфигурации: {file_path}")
 
-    data = _load_yaml(file_path)
+    data = _expand_env(_load_yaml(file_path))
     _CONFIG_CACHE[name] = data
     return data
 
