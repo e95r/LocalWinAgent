@@ -68,7 +68,7 @@ from tools.files import FileManager
 
 def run(params):
     manager = FileManager(params["whitelist"])
-    info = manager.open_path(params["path"], confirmed=params.get("confirmed", False))
+    info = manager.open_path(params["path"])
     stdout = info.get("reply", "")
     return {"ok": bool(info.get("ok")), "stdout": stdout, "stderr": info.get("error", ""), "data": {"result": info}}
 """
@@ -391,36 +391,69 @@ class IntentRouter:
         self.intent_inferencer = IntentInferencer(get_aliases())
         self.APP_KEYWORDS: Dict[str, tuple[str, ...]] = self._build_app_keywords()
 
-    def handle_message(self, message: str, session: AgentSession, session_state: SessionState) -> Dict[str, Any]:
-        message = message.strip()
-        if not message:
-            return self._make_response("Пустая команда.", ok=False)
+    def _ensure_session_state(self, state: dict | SessionState) -> SessionState:
+        if isinstance(state, SessionState):
+            return state
+        session_state = state.get("session_state") if isinstance(state, dict) else None
+        if not isinstance(session_state, SessionState):
+            session_state = SessionState()
+            if isinstance(state, dict):
+                state["session_state"] = session_state
+        return session_state
 
-        if session_state.last_results and time.time() - session_state.last_updated > 900:
-            session_state.clear_results()
+    def handle_message(
+        self,
+        text: str,
+        session: AgentSession,
+        state: dict,
+        *,
+        auto_confirm: bool | None = None,
+        force_confirm: bool | None = None,
+    ) -> Dict[str, Any]:
+        try:
+            message = text.strip()
+            if not message:
+                return self._make_response("Пустая команда.", ok=False)
 
-        normalized = message.lower().strip()
-        context_response = self._handle_context_commands(message, normalized, session, session_state)
-        if context_response:
-            return context_response
+            session_state = self._ensure_session_state(state)
 
-        if normalized in {"напиши путь до рабочего стола", "какой путь до рабочего стола"}:
-            desktop = get_desktop_path().resolve(strict=False)
-            return self._make_response(f"Рабочий стол: {desktop}", ok=True)
+            if session_state.last_results and time.time() - session_state.last_updated > 900:
+                session_state.clear_results()
 
-        if normalized in {"какие файлы есть на рабочем столе", "покажи рабочий стол"}:
-            intent_data: Optional[Dict[str, Any]] = {
-                "intent": "list_directory",
-                "path": str(get_desktop_path()),
-            }
-        else:
-            intent_data = self.intent_inferencer.infer(message)
+            confirmed_flag = bool(force_confirm) or bool(auto_confirm) or bool(getattr(session, "auto_confirm", False))
 
-        if not intent_data:
-            return self._make_response("Не понял запрос. Попробуйте переформулировать.", ok=False)
+            normalized = message.lower().strip()
+            normalized_clean = normalized.rstrip(" ?!.")
+            context_response = self._handle_context_commands(
+                message,
+                normalized_clean,
+                session,
+                session_state,
+                confirmed_flag,
+            )
+            if context_response:
+                return context_response
 
-        intent = intent_data.pop("intent")
-        return self._run_intent(intent, intent_data, session, session_state)
+            if normalized_clean in {"напиши путь до рабочего стола", "какой путь до рабочего стола"}:
+                desktop = get_desktop_path().resolve(strict=False)
+                return self._make_response(f"Рабочий стол: {desktop}", ok=True)
+
+            if normalized_clean in {"какие файлы есть на рабочем столе", "покажи рабочий стол"}:
+                intent_data: Optional[Dict[str, Any]] = {
+                    "intent": "list_directory",
+                    "path": str(get_desktop_path()),
+                }
+            else:
+                intent_data = self.intent_inferencer.infer(message)
+
+            if not intent_data:
+                return self._make_response("Не понял запрос. Попробуйте переформулировать.", ok=False)
+
+            intent = intent_data.pop("intent")
+            return self._run_intent(intent, intent_data, session, session_state, confirmed_flag)
+        except Exception as exc:  # pragma: no cover - защита от неожиданных ошибок
+            logger.exception("Ошибка обработки сообщения: %s", exc)
+            return self._make_response(f"Ошибка: {exc}", ok=False)
 
     def _handle_context_commands(
         self,
@@ -428,6 +461,7 @@ class IntentRouter:
         normalized: str,
         session: AgentSession,
         session_state: SessionState,
+        confirmed: bool,
     ) -> Optional[Dict[str, Any]]:
         if normalized in self.CONTEXT_RESET:
             session_state.clear_results()
@@ -446,14 +480,14 @@ class IntentRouter:
         item = session_state.last_results[index]
         kind = session_state.last_kind
         if kind == "file":
-            params = {"path": item, "confirmed": session.auto_confirm, "from_context": True}
-            return self._run_intent("open_file", params, session, session_state)
+            params = {"path": item, "confirmed": confirmed, "from_context": True}
+            return self._run_intent("open_file", params, session, session_state, confirmed)
         if kind == "web":
             params = {"url": item, "from_context": True}
-            return self._run_intent("open_web", params, session, session_state)
+            return self._run_intent("open_web", params, session, session_state, confirmed)
         if kind == "app":
             params = {"name": item, "from_context": True}
-            return self._run_intent("open_app", params, session, session_state)
+            return self._run_intent("open_app", params, session, session_state, confirmed)
         return self._make_response("Контекст недоступен для повторного открытия.", ok=False)
 
     def _resolve_context_index(self, token: str, total: int) -> Optional[int]:
@@ -481,10 +515,23 @@ class IntentRouter:
         params: Dict[str, Any],
         session: AgentSession,
         session_state: SessionState,
+        confirmed: bool,
     ) -> Dict[str, Any]:
-        prepared, confirmation_response = self._prepare_params(intent, params, session)
+        prepared, confirmation_response = self._prepare_params(intent, params, session, confirmed)
         if confirmation_response is not None:
             return confirmation_response
+
+        if intent in {
+            "create_file",
+            "write_file",
+            "append_file",
+            "move_path",
+            "copy_path",
+            "delete_path",
+            "list_directory",
+        }:
+            return self._handle_file_operation(intent, prepared, session_state)
+
         code = CODE_BY_INTENT.get(intent)
         if not code:
             return self._make_response("Действие пока не поддерживается.", ok=False)
@@ -497,23 +544,37 @@ class IntentRouter:
         intent: str,
         params: Dict[str, Any],
         session: AgentSession,
+        confirmed: bool,
     ) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
         prepared = dict(params)
-        if intent in {"create_file", "write_file", "append_file", "open_file", "list_directory"}:
+        if intent in {"create_file", "write_file", "append_file", "open_file", "list_directory", "move_path", "copy_path", "delete_path"}:
             path_value = prepared.get("path")
+            if isinstance(path_value, str) and path_value.endswith(":") and len(path_value) > 2:
+                path_value = path_value.rstrip(":")
+                prepared["path"] = path_value
             if path_value:
                 target = self.file_manager.normalize(path_value)
             else:
                 target = self.file_manager.default_root if intent == "list_directory" else None
             if target is not None:
-                needs_confirmation = self.file_manager.requires_confirmation(target)
-                confirmed = bool(prepared.get("confirmed")) or session.auto_confirm or not needs_confirmation
-                if needs_confirmation and not confirmed:
-                    action = self.FILE_ACTION_NAMES.get(intent, "операция")
-                    reply = f"Нужно подтверждение: {action} {target}"
-                    return prepared, self._make_response(reply, ok=False, requires_confirmation=True)
-                prepared["confirmed"] = confirmed
                 prepared["path"] = str(target)
+                prepared["confirmed"] = confirmed
+                if intent in {"move_path", "copy_path"}:
+                    prepared.setdefault("src", str(target))
+        if intent == "move_path":
+            destination = prepared.get("destination") or prepared.get("dst") or prepared.get("to")
+            if isinstance(destination, str) and destination.endswith(":") and len(destination) > 2:
+                destination = destination.rstrip(":")
+                prepared["destination"] = destination
+            if destination:
+                prepared["dst"] = str(self.file_manager.normalize(destination))
+        if intent == "copy_path":
+            destination = prepared.get("destination") or prepared.get("dst") or prepared.get("to")
+            if isinstance(destination, str) and destination.endswith(":") and len(destination) > 2:
+                destination = destination.rstrip(":")
+                prepared["destination"] = destination
+            if destination:
+                prepared["dst"] = str(self.file_manager.normalize(destination))
         if intent in {"create_file", "write_file", "append_file", "open_file", "list_directory", "search_local"}:
             prepared["whitelist"] = list(self.whitelist)
         if intent == "search_local":
@@ -522,6 +583,102 @@ class IntentRouter:
             prepared.setdefault("max_results", 5)
         return prepared, None
 
+    def _handle_file_operation(
+        self,
+        intent: str,
+        params: Dict[str, Any],
+        session_state: SessionState,
+    ) -> Dict[str, Any]:
+        confirmed = bool(params.get("confirmed"))
+        path_value = params.get("path")
+        try:
+            if intent == "create_file":
+                if not path_value:
+                    raise ValueError("Не указан путь для создания файла")
+                info = self.file_manager.create_file(
+                    path_value,
+                    content=str(params.get("content", "")),
+                    confirmed=confirmed,
+                )
+            elif intent == "write_file":
+                if not path_value:
+                    raise ValueError("Не указан путь для записи файла")
+                info = self.file_manager.write_text(
+                    path_value,
+                    str(params.get("content", "")),
+                    confirmed=confirmed,
+                )
+            elif intent == "append_file":
+                if not path_value:
+                    raise ValueError("Не указан путь для добавления в файл")
+                info = self.file_manager.append_text(
+                    path_value,
+                    str(params.get("content", "")),
+                    confirmed=confirmed,
+                )
+            elif intent == "list_directory":
+                info = self.file_manager.list_directory(path_value, confirmed=confirmed)
+            elif intent == "copy_path":
+                source = params.get("src") or path_value
+                destination = params.get("dst") or params.get("destination") or params.get("to")
+                if not source or not destination:
+                    raise ValueError("Не указаны исходный и целевой пути для копирования")
+                info = self.file_manager.copy_path(str(source), str(destination), confirmed=confirmed)
+            elif intent == "move_path":
+                source = params.get("src") or path_value
+                destination = params.get("dst") or params.get("destination") or params.get("to")
+                if not source or not destination:
+                    raise ValueError("Не указаны исходный и целевой пути для перемещения")
+                info = self.file_manager.move_path(str(source), str(destination), confirmed=confirmed)
+            elif intent == "delete_path":
+                if not path_value:
+                    raise ValueError("Не указан путь для удаления")
+                info = self.file_manager.delete_path(path_value, confirmed=confirmed)
+            else:  # pragma: no cover - защита от неподдерживаемых веток
+                return self._make_response("Операция недоступна.", ok=False)
+        except Exception as exc:
+            logger.exception("Ошибка подготовки операции %s: %s", intent, exc)
+            return self._make_response(f"Ошибка: {exc}", ok=False)
+
+        if info.get("requires_confirmation"):
+            target_path = info.get("path") or str(path_value or params.get("dst") or "")
+            reply = f"Нужно подтверждение для операции по пути: {target_path} — ответьте «да»"
+            return self._make_response(reply, ok=False, data={"result": info}, requires_confirmation=True)
+
+        if not info.get("ok"):
+            error_message = info.get("error") or "Не удалось выполнить файловую операцию"
+            target_path = info.get("path") or str(path_value or params.get("dst") or "")
+            reply = f"Ошибка: {error_message} ({target_path})"
+            return self._make_response(reply, ok=False, data={"result": info})
+
+        path_display = info.get("path") or str(path_value or params.get("dst") or "")
+        extras: List[str] = []
+        if "exists" in info:
+            extras.append(f"exists={info['exists']}")
+        if intent in {"create_file", "write_file", "append_file"} and "size" in info:
+            extras.append(f"size={info['size']}")
+
+        if intent == "list_directory":
+            raw_items = info.get("items") if isinstance(info.get("items"), list) else []
+            items = list(raw_items)
+            listing = "\n".join(items) if items else "(пусто)"
+            desktop_path = str(get_desktop_path().resolve(strict=False))
+            label = "Рабочий стол" if str(path_display) == desktop_path else "Каталог"
+            reply = f"{label}: {path_display}\n{listing}"
+            return self._make_response(reply, ok=True, data={"result": info}, items=items or None)
+
+        action_titles = {
+            "create_file": "Создан файл",
+            "write_file": "Записан файл",
+            "append_file": "Дополнен файл",
+            "copy_path": "Скопировано",
+            "move_path": "Перемещено",
+            "delete_path": "Удалено",
+        }
+        prefix = action_titles.get(intent, "Операция выполнена")
+        suffix = f" ({', '.join(extras)})" if extras else ""
+        reply = f"{prefix}: {path_display}{suffix}"
+        return self._make_response(reply, ok=True, data={"result": info})
     def _format_response(self, request: TaskRequest, result: TaskResult, session_state: SessionState) -> Dict[str, Any]:
         data = dict(result.data)
         if result.stdout and "stdout" not in data:
@@ -529,19 +686,29 @@ class IntentRouter:
         if result.stderr and "stderr" not in data:
             data["stderr"] = result.stderr
         items: Optional[List[Any]] = None
+        reply_override: Optional[str] = None
 
         if result.ok:
             if request.intent == "search_local":
                 results = data.get("results", [])
                 if isinstance(results, list):
-                    session_state.set_results([str(item) for item in results], "file")
-                    items = list(results)
+                    normalized = [str(item) for item in results]
+                    session_state.set_results(normalized, "file")
+                    items = list(normalized)
+                    if normalized:
+                        lines = [f"{idx + 1}) {entry}" for idx, entry in enumerate(normalized)]
+                        reply_override = "Готово: Нашёл:\n" + "\n".join(lines)
+                    else:
+                        reply_override = "Готово: Ничего не найдено"
             elif request.intent == "open_file":
                 path = request.params.get("path")
                 if path and not request.params.get("from_context"):
                     session_state.set_results([str(path)], "file")
                 elif request.params.get("from_context"):
                     session_state.last_updated = time.time()
+                message = result.stdout.strip()
+                if message:
+                    reply_override = message
             elif request.intent == "search_web":
                 raw_results = data.get("results", [])
                 urls: List[str] = []
@@ -575,7 +742,9 @@ class IntentRouter:
             if request.intent in {"search_local", "search_web"}:
                 session_state.clear_results()
 
-        if result.ok:
+        if reply_override is not None:
+            reply = reply_override
+        elif result.ok:
             reply_body = result.stdout.strip()
             reply = f"Готово: {reply_body}" if reply_body else "Готово."
         else:
