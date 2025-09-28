@@ -57,6 +57,7 @@ def test_dialog_context(dialog_router: IntentRouter, monkeypatch: pytest.MonkeyP
     ]
     expected_paths = [str(Path(path).expanduser().resolve(strict=False)) for path in fake_results]
 
+    monkeypatch.setattr("tools.search.search_files", lambda *args, **kwargs: expected_paths)
     monkeypatch.setattr("tools.search.search_local", lambda *args, **kwargs: expected_paths)
 
     opened: List[str] = []

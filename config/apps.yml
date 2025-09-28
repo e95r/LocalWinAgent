@@ -20,3 +20,11 @@ apps:
     title: "Google Chrome"
     command: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
     process_name: "chrome.exe"
+  edge:
+    title: "Microsoft Edge"
+    command: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+    process_name: "msedge.exe"
+  firefox:
+    title: "Mozilla Firefox"
+    command: "C:\\Program Files\\Mozilla Firefox\\firefox.exe"
+    process_name: "firefox.exe"

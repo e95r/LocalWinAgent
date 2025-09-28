@@ -90,14 +90,21 @@ def test_show_screenshot(router_env: Tuple[IntentRouter, Path], monkeypatch: pyt
         opened.append(path)
         return {"ok": True, "reply": f"Открыто: {path}"}
 
+    monkeypatch.setattr("tools.search.search_files", fake_search)
     monkeypatch.setattr("tools.search.search_local", fake_search)
     monkeypatch.setattr("tools.files.open_path", fake_open)
 
     response = router.handle_message("покажи вчерашний скриншот", session, state)
 
     assert response["ok"] is True
+    assert response.get("items") == [str(target.resolve(strict=False))]
+    assert opened == []
+    assert state.get_results(kind="file") == [str(target.resolve(strict=False))]
+
+    open_response = router.handle_message("открой первый", session, state)
+
+    assert open_response["ok"] is True
     assert opened == [str(target.resolve(strict=False))]
-    assert state.get_results(kind="file") == opened
 
 
 def test_search_web_and_open(router_env: Tuple[IntentRouter, Path], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -139,6 +146,7 @@ def test_context_open_last_result(router_env: Tuple[IntentRouter, Path], monkeyp
     file_path.write_text("fake", encoding="utf-8")
     absolute = str(file_path.resolve(strict=False))
 
+    monkeypatch.setattr("tools.search.search_files", lambda *args, **kwargs: [absolute])
     monkeypatch.setattr("tools.search.search_local", lambda *args, **kwargs: [absolute])
 
     opened: list[str] = []
