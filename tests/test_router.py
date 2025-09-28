@@ -10,6 +10,7 @@ import pytest
 
 import config
 from intent_router import AgentSession, IntentRouter, SessionState
+from docx import Document
 
 
 @pytest.fixture()
@@ -124,3 +125,42 @@ def test_router_desktop_path(router_with_tmp: Dict[str, object]) -> None:
     state = SessionState()
     response = router.handle_message("напиши путь до рабочего стола", session, state)
     assert str(allow_dir.resolve(strict=False)) in response["reply"]
+
+
+def test_generate_text_creates_file(router_with_tmp: Dict[str, object]) -> None:
+    router: IntentRouter = router_with_tmp["router"]  # type: ignore[assignment]
+    allow_dir: Path = router_with_tmp["allow_dir"]  # type: ignore[assignment]
+    monkeypatch: pytest.MonkeyPatch = router_with_tmp["monkeypatch"]  # type: ignore[assignment]
+
+    session = AgentSession(auto_confirm=True)
+    state = SessionState()
+
+    monkeypatch.setattr(router.llm, "generate", lambda prompt, model=None, stream=True: "Текст о птицах.")
+    monkeypatch.setattr("intent_router.time.time", lambda: 1700000000)
+
+    response = router.handle_message("создай текстовый файл и вставь в него текст о птицах", session, state)
+    assert response["ok"] is True
+    expected_path = allow_dir / "generated_1700000000.txt"
+    assert expected_path.exists()
+    assert "птиц" in expected_path.read_text(encoding="utf-8").lower()
+
+
+def test_generate_text_append_docx(router_with_tmp: Dict[str, object]) -> None:
+    router: IntentRouter = router_with_tmp["router"]  # type: ignore[assignment]
+    allow_dir: Path = router_with_tmp["allow_dir"]  # type: ignore[assignment]
+    monkeypatch: pytest.MonkeyPatch = router_with_tmp["monkeypatch"]  # type: ignore[assignment]
+
+    session = AgentSession(auto_confirm=True)
+    state = SessionState()
+
+    target = allow_dir / "птицы.docx"
+
+    monkeypatch.setattr(router.llm, "generate", lambda prompt, model=None, stream=True: "Информация о воробьях.")
+
+    response = router.handle_message("добавь в файл птицы.docx информацию о воробьях", session, state)
+    assert response["ok"] is True
+    assert target.exists()
+
+    document = Document(str(target))
+    text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    assert "вороб" in text.lower()
