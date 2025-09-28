@@ -7,6 +7,7 @@ pyyaml==6.0.1
 rich==13.9.3
 prompt_toolkit==3.0.47
 rapidfuzz==3.5.2
+python-docx==0.8.11
 
 # Автоматизация браузера
 playwright==1.45.0

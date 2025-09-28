@@ -12,6 +12,7 @@ from typing import Iterable, List, Optional
 
 import config
 from tools.apps import open_with_shell
+from tools import docx_writer
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,7 @@ def open_path(path: str) -> dict:
             "path": str(target),
             "exists": False,
             "error": "Путь не существует",
+            "verified": False,
         }
 
     actual = _resolve_shortcut(target)
@@ -107,14 +109,16 @@ def open_path(path: str) -> dict:
         else:  # pragma: no cover - не Windows
             open_with_shell(str(actual))
     except Exception as exc:  # pragma: no cover - системные ошибки Windows
+        exists = resolved.exists()
         return {
             "ok": False,
             "path": str(resolved),
-            "exists": resolved.exists(),
+            "exists": exists,
             "error": str(exc),
+            "verified": exists,
         }
 
-    return {"ok": True, "path": str(resolved), "exists": True}
+    return {"ok": True, "path": str(resolved), "exists": True, "verified": True}
 
 
 class ConfirmationRequiredError(PermissionError):
@@ -169,6 +173,7 @@ class FileManager:
                 "path": str(absolute),
                 "requires_confirmation": True,
                 "error": "Требуется подтверждение для операции вне белого списка",
+                "verified": False,
             }
         return None
 
@@ -178,6 +183,28 @@ class FileManager:
             handler.write(content)
             handler.flush()
             os.fsync(handler.fileno())
+
+    def _write_content(self, path: Path, content: str, *, append: bool, encoding: str) -> None:
+        suffix = path.suffix.lower()
+        if suffix == ".docx":
+            if append:
+                docx_writer.append_docx(path, content)
+            else:
+                docx_writer.write_docx(path, content)
+            return
+        mode = "a" if append else "w"
+        self._sync_write(path, content, mode=mode, encoding=encoding)
+
+    def _collect_info(self, path: Path) -> dict:
+        absolute = path.resolve(strict=False)
+        exists = path.exists()
+        size = path.stat().st_size if exists and path.is_file() else 0
+        return {
+            "path": str(absolute),
+            "exists": exists,
+            "size": size,
+            "verified": exists,
+        }
 
     def create_file(
         self,
@@ -193,17 +220,16 @@ class FileManager:
             return denied
         try:
             existed = target.exists()
-            mode = "a" if existed else "w"
-            self._sync_write(target, content, mode=mode, encoding=encoding)
-            exists = target.exists()
-            size = target.stat().st_size if exists else 0
-            return {
-                "ok": exists,
-                "path": str(target.resolve(strict=False)),
-                "exists": exists,
-                "size": size,
-                "requires_confirmation": False,
-            }
+            self._write_content(target, content, append=False, encoding=encoding)
+            info = self._collect_info(target)
+            info.update(
+                {
+                    "ok": bool(info["verified"]),
+                    "requires_confirmation": False,
+                    "status": "updated" if existed else "created",
+                }
+            )
+            return info
         except Exception as exc:
             logger.exception("Не удалось создать файл %s", target)
             return {
@@ -211,6 +237,7 @@ class FileManager:
                 "path": str(target.resolve(strict=False)),
                 "requires_confirmation": False,
                 "error": str(exc),
+                "verified": False,
             }
 
     def write_text(self, path: str, content: str, *, confirmed: bool = False, encoding: str = "utf-8") -> dict:
@@ -219,16 +246,16 @@ class FileManager:
         if denied:
             return denied
         try:
-            self._sync_write(target, content, mode="w", encoding=encoding)
-            exists = target.exists()
-            size = target.stat().st_size if exists else 0
-            return {
-                "ok": exists,
-                "path": str(target.resolve(strict=False)),
-                "exists": exists,
-                "size": size,
-                "requires_confirmation": False,
-            }
+            self._write_content(target, content, append=False, encoding=encoding)
+            info = self._collect_info(target)
+            info.update(
+                {
+                    "ok": bool(info["verified"]),
+                    "requires_confirmation": False,
+                    "status": "overwritten",
+                }
+            )
+            return info
         except Exception as exc:
             logger.exception("Не удалось выполнить запись в %s", target)
             return {
@@ -236,6 +263,7 @@ class FileManager:
                 "path": str(target.resolve(strict=False)),
                 "requires_confirmation": False,
                 "error": str(exc),
+                "verified": False,
             }
 
     def append_text(self, path: str, content: str, *, confirmed: bool = False, encoding: str = "utf-8") -> dict:
@@ -244,16 +272,17 @@ class FileManager:
         if denied:
             return denied
         try:
-            self._sync_write(target, content, mode="a", encoding=encoding)
-            exists = target.exists()
-            size = target.stat().st_size if exists else 0
-            return {
-                "ok": exists,
-                "path": str(target.resolve(strict=False)),
-                "exists": exists,
-                "size": size,
-                "requires_confirmation": False,
-            }
+            existed = target.exists()
+            self._write_content(target, content, append=True, encoding=encoding)
+            info = self._collect_info(target)
+            info.update(
+                {
+                    "ok": bool(info["verified"]),
+                    "requires_confirmation": False,
+                    "status": "appended" if existed else "created",
+                }
+            )
+            return info
         except Exception as exc:
             logger.exception("Не удалось дополнить файл %s", target)
             return {
@@ -261,6 +290,7 @@ class FileManager:
                 "path": str(target.resolve(strict=False)),
                 "requires_confirmation": False,
                 "error": str(exc),
+                "verified": False,
             }
 
     def list_directory(self, path: str | None = None, *, confirmed: bool = False) -> dict:
@@ -281,6 +311,7 @@ class FileManager:
                 "path": str(directory.resolve(strict=False)),
                 "items": items,
                 "requires_confirmation": False,
+                "verified": True,
             }
         except Exception as exc:
             logger.exception("Не удалось получить список каталога %s", directory)
@@ -289,6 +320,7 @@ class FileManager:
                 "path": str(directory.resolve(strict=False)),
                 "requires_confirmation": False,
                 "error": str(exc),
+                "verified": False,
             }
 
     def open_path(self, path: str) -> dict:
@@ -313,6 +345,7 @@ class FileManager:
                 "path": str(destination.resolve(strict=False)),
                 "exists": exists,
                 "requires_confirmation": False,
+                "verified": exists,
             }
         except Exception as exc:
             logger.exception("Не удалось скопировать %s в %s", source, destination)
@@ -321,6 +354,7 @@ class FileManager:
                 "path": str(destination.resolve(strict=False)),
                 "requires_confirmation": False,
                 "error": str(exc),
+                "verified": False,
             }
 
     def move_path(self, src: str, dst: str, *, confirmed: bool = False) -> dict:
@@ -338,6 +372,7 @@ class FileManager:
                 "path": str(destination.resolve(strict=False)),
                 "exists": exists,
                 "requires_confirmation": False,
+                "verified": exists,
             }
         except Exception as exc:
             logger.exception("Не удалось переместить %s в %s", source, destination)
@@ -346,6 +381,7 @@ class FileManager:
                 "path": str(destination.resolve(strict=False)),
                 "requires_confirmation": False,
                 "error": str(exc),
+                "verified": False,
             }
 
     def delete_path(self, path: str, *, confirmed: bool = False) -> dict:
@@ -364,6 +400,7 @@ class FileManager:
                 "path": str(target.resolve(strict=False)),
                 "exists": exists,
                 "requires_confirmation": False,
+                "verified": not exists,
             }
         except Exception as exc:
             logger.exception("Не удалось удалить %s", target)
@@ -372,4 +409,5 @@ class FileManager:
                 "path": str(target.resolve(strict=False)),
                 "requires_confirmation": False,
                 "error": str(exc),
+                "verified": False,
             }
