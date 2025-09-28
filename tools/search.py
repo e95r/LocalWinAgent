@@ -1,43 +1,19 @@
-"""Поиск файлов и директорий."""
+"""Поиск файлов с использованием Everything CLI и обхода белого списка."""
 
 from __future__ import annotations
 
 import logging
 import os
-import platform
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from typing import Iterable, List
 
-try:  # pragma: no cover - rapidfuzz может отсутствовать
-    from rapidfuzz import fuzz  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover
-    from difflib import SequenceMatcher
-
-    class _FallbackFuzz:
-        @staticmethod
-        def partial_ratio(a: str, b: str) -> float:
-            return SequenceMatcher(None, a, b).ratio() * 100
-
-    fuzz = _FallbackFuzz()  # type: ignore
-
+import config
 from tools.files import is_path_hidden, normalize_path
 
 logger = logging.getLogger(__name__)
 
 EVERYTHING_CLI = Path(__file__).resolve().parent.parent / "bin" / "es.exe"
-
-
-class EverythingNotInstalledError(RuntimeError):
-    """Ошибка при отсутствии Everything CLI."""
-
-
-@dataclass(slots=True)
-class SearchResult:
-    path: str
-    score: float
-    modified: float
 
 
 def _call_everything(query: str, max_results: int) -> List[str]:
@@ -61,33 +37,39 @@ def _call_everything(query: str, max_results: int) -> List[str]:
     if completed.returncode != 0:
         logger.debug("Everything вернул код %s", completed.returncode)
         return []
-    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    normalized = [str(normalize_path(line)) for line in lines]
+    unique: List[str] = []
+    seen = set()
+    for entry in normalized:
+        if entry in seen:
+            continue
+        seen.add(entry)
+        unique.append(entry)
+        if len(unique) >= max_results:
+            break
+    return unique
 
 
-def _token_score(name: str, tokens: Sequence[str], baseline: str) -> float:
-    name_lower = name.lower()
-    scores = [fuzz.partial_ratio(name_lower, baseline)]
-    for token in tokens:
-        scores.append(fuzz.partial_ratio(name_lower, token))
-    if baseline in name_lower:
-        scores.append(100.0)
-    return max(scores)
+def _iter_whitelist_paths() -> Iterable[Path]:
+    paths_config = config.load_config("paths")
+    whitelist = paths_config.get("whitelist", [])
+    if not isinstance(whitelist, list):
+        return []
+    for raw in whitelist:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        normalized = Path(normalize_path(raw))
+        if normalized.exists():
+            yield normalized
 
 
-def _fallback_search(
-    query: str,
-    roots: Iterable[Path],
-    *,
-    max_results: int,
-    extensions: Optional[Sequence[str]] = None,
-) -> List[str]:
-    tokens = [token for token in query.lower().replace("_", " ").split() if token]
-    baseline = query.lower()
-    extension_set = {ext.lower() for ext in extensions or ()}
-    scored: List[SearchResult] = []
-
-    for root in roots:
-        if not root.exists() or not root.is_dir():
+def _fallback_search(query: str, max_results: int) -> List[str]:
+    query_lower = query.lower()
+    results: List[str] = []
+    seen = set()
+    for root in _iter_whitelist_paths():
+        if not root.is_dir():
             continue
         for current_root, dirnames, filenames in os.walk(root):
             current_path = Path(current_root)
@@ -96,36 +78,29 @@ def _fallback_search(
                 candidate = current_path / filename
                 if is_path_hidden(candidate):
                     continue
-                if extension_set and candidate.suffix.lower() not in extension_set:
+                if query_lower not in filename.lower():
                     continue
-                score = _token_score(candidate.name, tokens, baseline)
-                if score < 75:
+                resolved = str(candidate.resolve(strict=False))
+                if resolved in seen:
                     continue
-                try:
-                    mtime = candidate.stat().st_mtime
-                except OSError:
-                    mtime = 0.0
-                scored.append(SearchResult(path=str(candidate.resolve(strict=False)), score=score, modified=mtime))
-    scored.sort(key=lambda item: (-item.score, -item.modified))
-    return [item.path for item in scored[:max_results]]
+                seen.add(resolved)
+                results.append(resolved)
+                if len(results) >= max_results:
+                    return results
+    return results
 
 
-def search_local(
-    query: str,
-    *,
-    max_results: int = 25,
-    whitelist: Optional[Iterable[str]] = None,
-    extensions: Optional[Sequence[str]] = None,
-) -> List[str]:
+def search_files(query: str, max_results: int = 50) -> List[str]:
     query = query.strip()
     if not query:
         return []
+    results = _call_everything(query, max_results)
+    if results:
+        return results
+    return _fallback_search(query, max_results)
 
-    results: List[str] = []
-    if platform.system() == "Windows":
-        results = _call_everything(query, max_results)
-        results = [str(normalize_path(path)) for path in results][:max_results]
-        if results:
-            return results
-    roots = [normalize_path(path) for path in (whitelist or []) if path]
-    return _fallback_search(query, roots, max_results=max_results, extensions=extensions)
+
+def search_local(query: str, *, max_results: int = 25, whitelist=None, extensions=None) -> List[str]:  # noqa: D401
+    """Совместимость со старым API: перенаправление на search_files."""
+
+    return search_files(query, max_results=max_results)

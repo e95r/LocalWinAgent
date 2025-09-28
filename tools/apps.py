@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import shutil
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 try:  # pragma: no cover - rapidfuzz может быть недоступен в окружении
@@ -58,6 +60,18 @@ DEFAULT_APPLICATIONS: Dict[str, Dict[str, object]] = {
         "command": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
         "process_name": "chrome.exe",
         "aliases": ("chrome", "хром", "браузер", "google"),
+    },
+    "edge": {
+        "title": "Microsoft Edge",
+        "command": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+        "process_name": "msedge.exe",
+        "aliases": ("edge", "эдж", "браузер", "microsoft edge", "msedge"),
+    },
+    "firefox": {
+        "title": "Mozilla Firefox",
+        "command": "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+        "process_name": "firefox.exe",
+        "aliases": ("firefox", "фаерфокс", "mozilla", "мозилла", "браузер"),
     },
     "vscode": {
         "title": "Visual Studio Code",
@@ -146,7 +160,7 @@ def _match_alias(name: str) -> Optional[str]:
 
 
 def launch(name_or_alias: str) -> dict:
-    key = _match_alias(name_or_alias)
+    key = _match_alias(name_or_alias) or (name_or_alias.strip().lower() if name_or_alias else None)
     if not key:
         message = f"Не знаю, как открыть '{name_or_alias}'."
         return {"ok": False, "message": message}
@@ -154,18 +168,44 @@ def launch(name_or_alias: str) -> dict:
     if not app:
         message = f"Не удалось найти маппинг приложения '{name_or_alias}'."
         return {"ok": False, "message": message}
-    command = _expand_command(app.command)
+    resolved = _resolve_command_path(app.command)
+    if not resolved:
+        return {"ok": False, "message": f"Приложение '{app.title}' не установлено"}
     system = platform.system()
-    if system == "Windows":
-        try:
-            subprocess.Popen(command, shell=False)  # noqa: S603
-        except FileNotFoundError:
-            return {"ok": False, "message": f"Файл программы не найден: {command}"}
-        except Exception as exc:  # pragma: no cover - системные ошибки Windows
-            return {"ok": False, "message": str(exc)}
-    else:  # pragma: no cover - тестовые окружения
-        logger.info("Имитируем запуск '%s' на платформе %s", app.title, system)
-    return {"ok": True, "message": f"Приложение '{app.title}' запущено", "command": command}
+    try:
+        if system == "Windows":
+            if os.path.isfile(resolved):
+                os.startfile(resolved)  # type: ignore[attr-defined]  # noqa: S606
+            else:
+                subprocess.Popen(resolved)  # noqa: S603
+        else:  # pragma: no cover - тестовые окружения
+            logger.info("Имитируем запуск '%s' на платформе %s", app.title, system)
+    except FileNotFoundError:
+        return {"ok": False, "message": f"Файл программы не найден: {resolved}"}
+    except Exception as exc:  # pragma: no cover - системные ошибки Windows
+        return {"ok": False, "message": str(exc)}
+    return {"ok": True, "message": f"Приложение '{app.title}' запущено", "command": resolved, "path": resolved}
+
+
+def _resolve_command_path(command: str) -> Optional[str]:
+    expanded = _expand_command(command)
+    path = Path(expanded)
+    if path.exists():
+        return str(path)
+    located = shutil.which(expanded)
+    if located:
+        return str(Path(located))
+    if os.path.isabs(expanded):
+        return str(Path(expanded)) if Path(expanded).exists() else None
+    return shutil.which(command)
+
+
+def is_installed(app_id: str) -> bool:
+    app = _APPLICATIONS.get(app_id)
+    if not app:
+        return False
+    resolved = _resolve_command_path(app.command)
+    return bool(resolved)
 
 
 def close(name_or_alias: str) -> dict:

@@ -63,15 +63,22 @@ def test_infer_open_file(
         opened.append(path)
         return {"ok": True, "path": path, "reply": f"Открыто: {path}"}
 
+    monkeypatch.setattr("tools.search.search_files", fake_search)
     monkeypatch.setattr("tools.search.search_local", fake_search)
     monkeypatch.setattr("tools.files.open_path", fake_open)
 
     response = router.handle_message("посмотреть скриншот", session, state)
 
     assert response["ok"] is True
-    assert opened == found
+    assert response.get("items") == found
+    assert opened == []
     assert search_calls and "скриншот" in search_calls[0][0]
     assert state.get_results(kind="file") == found
+
+    open_response = router.handle_message("открой 1", session, state)
+
+    assert open_response["ok"] is True
+    assert opened == found
 
 
 def test_infer_open_app(
@@ -123,6 +130,7 @@ def test_context_pronoun_after_search(
     router, session, state = intent_router
     allow_dir = tmp_path / "allow"
     found = [str((allow_dir / "report.pdf").resolve(strict=False))]
+    monkeypatch.setattr("tools.search.search_files", lambda *args, **kwargs: found)
     monkeypatch.setattr("tools.search.search_local", lambda *args, **kwargs: found)
     opened: List[str] = []
 
@@ -133,8 +141,9 @@ def test_context_pronoun_after_search(
     monkeypatch.setattr("tools.files.open_path", fake_open)
 
     router.handle_message("мне нужен вчерашний отчёт", session, state)
-    assert opened == [found[0]]
+    assert opened == []
 
+    router.handle_message("открой его", session, state)
     router.handle_message("открой его", session, state)
     resolved = [str(Path(path).resolve(strict=False)) for path in opened]
     expected = [str(Path(found[0]).resolve(strict=False))] * 2
@@ -148,6 +157,7 @@ def test_reset_context(
 ) -> None:
     router, session, state = intent_router
     found = [str(tmp_path / "video.mp4")]
+    monkeypatch.setattr("tools.search.search_files", lambda *args, **kwargs: found)
     monkeypatch.setattr("tools.search.search_local", lambda *args, **kwargs: found)
     monkeypatch.setattr("tools.files.open_path", lambda path: {"ok": True, "reply": f"Открыто: {path}"})
 

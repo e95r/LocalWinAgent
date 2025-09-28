@@ -7,11 +7,12 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from config import load_config
 from core.task_executor import compile_and_run
 from core.task_schema import TaskRequest, TaskResult
+from tools import apps as apps_module
 from tools.apps import get_aliases
 
 try:  # pragma: no cover - rapidfuzz может отсутствовать
@@ -27,6 +28,7 @@ except ModuleNotFoundError:  # pragma: no cover
     fuzz = _FallbackFuzz()  # type: ignore
 from tools.files import FileManager, get_desktop_path
 from tools import search as search_tools
+from tools.llm_client import OllamaClient
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +189,9 @@ class AgentSession:
     model: str = "llama3.1:8b"
     pending: Optional[PendingAction] = None
     session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    preferred_browser: Optional[str] = None
+    awaiting_browser_choice: bool = False
+    available_browsers: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(slots=True)
@@ -223,6 +228,7 @@ class IntentInferencer:
     OPEN_FILE_RE = re.compile(r"открой\s+(?:файл|документ|папк[ауи])\s+(?P<path>[\w./\\:-]+)", re.IGNORECASE)
     SEARCH_FILE_RE = re.compile(r"(?:найди|найти|поищи|ищи)\s+(?P<query>.+)", re.IGNORECASE)
     OPEN_GENERIC_RE = re.compile(r"(?:открой|покажи|запусти)\s+(?P<target>.+)", re.IGNORECASE)
+    OPEN_BROWSER_RE = re.compile(r"(?:открой|запусти|запустить|открыть)\s+(?:.*\s)?браузер", re.IGNORECASE)
     URL_RE = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
     CONTENT_RE = re.compile(r"(?:с\s+текстом|контент|текст(?:ом)?)\s+(?P<value>.+)", re.IGNORECASE)
 
@@ -284,10 +290,6 @@ class IntentInferencer:
     def infer(self, message: str) -> Optional[Dict[str, Any]]:
         normalized = message.lower().strip()
         message_core = message.strip().rstrip(" ?!.")
-        app = self._detect_app(normalized)
-        if app:
-            return {"intent": "open_app", "name": app}
-
         file_hint = any(re.search(rf"\b{re.escape(word)}\b", normalized) for word in self.FILE_HINTS)
 
         match = self.CREATE_RE.search(message_core)
@@ -317,6 +319,13 @@ class IntentInferencer:
         if match:
             return {"intent": "open_file", "path": match.group("path")}
 
+        if self.OPEN_BROWSER_RE.search(message_core):
+            return {"intent": "open_browser"}
+
+        app = self._detect_app(normalized)
+        if app:
+            return {"intent": "open_app", "name": app}
+
         search_match = self.SEARCH_FILE_RE.search(message_core)
         if search_match and (file_hint or self._looks_like_path(search_match.group("query"))):
             query = search_match.group("query").strip()
@@ -340,8 +349,7 @@ class IntentInferencer:
         should_local = self._should_search_local(normalized)
         if should_local or file_hint:
             query = self._clean_query(message) or message.strip()
-            auto_open = ("найди" not in normalized) or file_hint
-            return {"intent": "search_local", "query": query, "auto_open_first": auto_open}
+            return {"intent": "search_local", "query": query, "auto_open_first": False}
 
         return None
 
@@ -418,6 +426,14 @@ class IntentRouter:
         self.file_manager = FileManager(self.whitelist)
         self.intent_inferencer = IntentInferencer(get_aliases())
         self.APP_KEYWORDS: Dict[str, tuple[str, ...]] = self._build_app_keywords()
+        self.llm = OllamaClient()
+        self.browser_ids: tuple[str, ...] = ("chrome", "edge", "firefox")
+        self.browser_aliases: Dict[str, tuple[str, ...]] = self._build_browser_aliases()
+
+    def ask_llm(self, prompt: str, model: Optional[str] = None) -> str:
+        chosen_model = model or getattr(self.llm, "default_model", None)
+        answer = self.llm.generate(prompt, model=chosen_model)
+        return answer if answer else "Модель не вернула ответ."
 
     def _ensure_session_state(self, state: dict | SessionState) -> SessionState:
         if isinstance(state, SessionState):
@@ -452,6 +468,14 @@ class IntentRouter:
 
             normalized = message.lower().strip()
             normalized_clean = normalized.rstrip(" ?!.")
+
+            if session.awaiting_browser_choice:
+                choice = self._resolve_browser_choice(normalized, session.available_browsers or None)
+                if choice:
+                    return self._launch_browser(choice, session)
+                options = self._browser_display_list(session.available_browsers or self.browser_ids)
+                return self._make_response(f"Какой браузер открыть? Доступны: {options}", ok=False)
+
             context_response = self._handle_context_commands(
                 message,
                 normalized_clean,
@@ -475,9 +499,12 @@ class IntentRouter:
                 intent_data = self.intent_inferencer.infer(message)
 
             if not intent_data:
-                return self._make_response("Не понял запрос. Попробуйте переформулировать.", ok=False)
+                llm_response = self.ask_llm(message, model=getattr(session, "model", None))
+                return self._make_response(llm_response, ok=True)
 
             intent = intent_data.pop("intent")
+            if intent == "open_browser":
+                intent_data.setdefault("utterance", message)
             return self._run_intent(intent, intent_data, session, session_state, confirmed_flag)
         except Exception as exc:  # pragma: no cover - защита от неожиданных ошибок
             logger.exception("Ошибка обработки сообщения: %s", exc)
@@ -616,6 +643,16 @@ class IntentRouter:
         session_state: SessionState,
         confirmed: bool,
     ) -> Dict[str, Any]:
+        if intent == "qa/smalltalk":
+            prompt = str(params.get("prompt") or params.get("text") or params.get("message") or "")
+            if not prompt and session_state.last_results:
+                prompt = session_state.last_results[0]
+            answer = self.ask_llm(prompt or "", model=getattr(session, "model", None))
+            return self._make_response(answer, ok=True)
+
+        if intent == "open_browser":
+            return self._handle_open_browser(session, params)
+
         if intent == "search_file":
             return self._handle_search_file(params, session_state)
 
@@ -878,12 +915,106 @@ class IntentRouter:
             response["items"] = items
         return response
 
+    def _build_browser_aliases(self) -> Dict[str, tuple[str, ...]]:
+        return {
+            "chrome": ("chrome", "google chrome", "хром", "гугл", "google"),
+            "edge": ("edge", "microsoft edge", "эдж", "msedge", "микрософт эдж"),
+            "firefox": ("firefox", "mozilla firefox", "фаерфокс", "мозилла", "mozilla"),
+            "yandex": ("yandex", "яндекс", "яндекс браузер"),
+        }
+
     def _build_app_keywords(self) -> Dict[str, tuple[str, ...]]:
         aliases = get_aliases()
         mapping: Dict[str, set[str]] = {}
         for alias, key in aliases.items():
             mapping.setdefault(key, set()).add(alias)
         return {key: tuple(sorted(values)) for key, values in mapping.items()}
+
+    def _available_browsers(self) -> List[str]:
+        available: List[str] = []
+        for browser_id in self.browser_ids:
+            if apps_module.is_installed(browser_id):
+                available.append(browser_id)
+        return available
+
+    def _browser_title(self, browser_id: str) -> str:
+        apps = apps_module.get_known_apps()
+        app = apps.get(browser_id)
+        if app:
+            return app.title
+        mapping = {
+            "chrome": "Google Chrome",
+            "edge": "Microsoft Edge",
+            "firefox": "Mozilla Firefox",
+            "yandex": "Яндекс.Браузер",
+        }
+        return mapping.get(browser_id, browser_id.title())
+
+    def _browser_display_list(self, browsers: Iterable[str]) -> str:
+        titles = [self._browser_title(browser) for browser in browsers]
+        return ", ".join(titles)
+
+    def _resolve_browser_choice(self, message: str, allowed: Optional[Iterable[str]] = None) -> Optional[str]:
+        normalized = message.lower().strip()
+        candidates = list(allowed) if allowed is not None else list(self.browser_aliases.keys())
+        for browser_id in candidates:
+            aliases = self.browser_aliases.get(browser_id, ())
+            for alias in aliases:
+                if re.search(rf"\b{re.escape(alias.lower())}\b", normalized):
+                    return browser_id
+        return None
+
+    def _launch_browser(self, browser_id: str, session: AgentSession) -> Dict[str, Any]:
+        title = self._browser_title(browser_id)
+        if not apps_module.is_installed(browser_id):
+            session.awaiting_browser_choice = False
+            session.available_browsers = tuple()
+            if session.preferred_browser == browser_id:
+                session.preferred_browser = None
+            return self._make_response(f"Браузер {title} недоступен на этом компьютере.", ok=False)
+
+        result = apps_module.launch(browser_id)
+        if result.get("ok"):
+            session.preferred_browser = browser_id
+            session.awaiting_browser_choice = False
+            session.available_browsers = tuple()
+            reply = f"Открываю {title}."
+            return self._make_response(reply, ok=True, data={"result": result})
+
+        error_message = result.get("message") or result.get("error") or "Не удалось открыть браузер."
+        return self._make_response(f"Не удалось открыть {title}: {error_message}", ok=False, data={"result": result})
+
+    def _handle_open_browser(self, session: AgentSession, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        utterance = ""
+        if params and isinstance(params, dict):
+            utterance = str(params.get("utterance") or params.get("message") or "").lower()
+
+        initial_choice: Optional[str] = None
+        if utterance:
+            initial_choice = self._resolve_browser_choice(utterance)
+            if initial_choice:
+                session.preferred_browser = initial_choice
+
+        preferred = session.preferred_browser
+        if preferred and apps_module.is_installed(preferred):
+            return self._launch_browser(preferred, session)
+        if preferred and not apps_module.is_installed(preferred):
+            session.preferred_browser = None
+
+        available = self._available_browsers()
+        if not available:
+            session.awaiting_browser_choice = False
+            session.available_browsers = tuple()
+            return self._make_response("Не удалось найти установленный браузер.", ok=False)
+
+        if len(available) == 1:
+            return self._launch_browser(available[0], session)
+
+        session.awaiting_browser_choice = True
+        session.available_browsers = tuple(available)
+        options = self._browser_display_list(available)
+        reply = f"Какой браузер открыть? Доступны: {options}"
+        return self._make_response(reply, ok=False)
 
     def fuzzy_match(self, phrase: str, keywords: Dict[str, tuple[str, ...]]) -> Optional[str]:
         phrase_lower = phrase.lower()
