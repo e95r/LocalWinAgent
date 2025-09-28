@@ -45,7 +45,7 @@ def router_with_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Dict[str
     else:
         monkeypatch.setattr(os, "startfile", lambda p: p, raising=False)
 
-    return {"router": router, "allow_dir": allow_dir}
+    return {"router": router, "allow_dir": allow_dir, "monkeypatch": monkeypatch}
 
 
 def test_full_file_flow(router_with_tmp: Dict[str, object]) -> None:
@@ -73,3 +73,32 @@ def test_full_file_flow(router_with_tmp: Dict[str, object]) -> None:
     response_list = router.handle_message("покажи каталог .", session)
     assert "Каталог:" in response_list["reply"]
     assert "test.txt" in response_list["reply"]
+
+
+def test_router_desktop_listing(router_with_tmp: Dict[str, object]) -> None:
+    router: IntentRouter = router_with_tmp["router"]  # type: ignore[assignment]
+    allow_dir: Path = router_with_tmp["allow_dir"]  # type: ignore[assignment]
+    monkeypatch: pytest.MonkeyPatch = router_with_tmp["monkeypatch"]  # type: ignore[assignment]
+
+    (allow_dir / "visible.txt").write_text("ok", encoding="utf-8")
+    (allow_dir / "desktop.ini").write_text("hidden", encoding="utf-8")
+
+    monkeypatch.setattr("intent_router.get_desktop_path", lambda: allow_dir)
+
+    session = AgentSession(auto_confirm=True)
+    response = router.handle_message("Какие файлы есть на рабочем столе?", session)
+    assert "Рабочий стол" in response["reply"]
+    assert "visible.txt" in response["reply"]
+    assert "desktop.ini" not in response["reply"]
+
+
+def test_router_desktop_path(router_with_tmp: Dict[str, object]) -> None:
+    router: IntentRouter = router_with_tmp["router"]  # type: ignore[assignment]
+    allow_dir: Path = router_with_tmp["allow_dir"]  # type: ignore[assignment]
+    monkeypatch: pytest.MonkeyPatch = router_with_tmp["monkeypatch"]  # type: ignore[assignment]
+
+    monkeypatch.setattr("intent_router.get_desktop_path", lambda: allow_dir)
+
+    session = AgentSession(auto_confirm=True)
+    response = router.handle_message("напиши путь до рабочего стола", session)
+    assert str(allow_dir.resolve(strict=False)) in response["reply"]

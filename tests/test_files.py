@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.files import ConfirmationRequiredError, FileManager
+from tools.files import ConfirmationRequiredError, FileManager, open_path as module_open_path
 
 
 @pytest.fixture()
@@ -23,6 +23,8 @@ def test_create_write_append_list_delete(
 ) -> None:
     allow_dir = tmp_path / "allow"
     target = allow_dir / "sample.txt"
+    (allow_dir / "desktop.ini").write_text("service", encoding="utf-8")
+    (allow_dir / ".secret").write_text("hidden", encoding="utf-8")
 
     result_create = file_manager.create_file(str(target), confirmed=True)
     assert result_create["ok"] is True
@@ -40,6 +42,8 @@ def test_create_write_append_list_delete(
     listing = file_manager.list_directory(str(allow_dir), confirmed=True)
     assert listing["ok"] is True
     assert "sample.txt" in listing["items"]
+    assert "desktop.ini" not in listing["items"]
+    assert ".secret" not in listing["items"]
 
     opened: dict[str, str] = {}
 
@@ -67,3 +71,16 @@ def test_requires_confirmation(file_manager: FileManager, tmp_path: Path) -> Non
     outside = tmp_path / "outside.txt"
     with pytest.raises(ConfirmationRequiredError):
         file_manager.write_text(str(outside), "данные", confirmed=False)
+
+
+def test_module_open_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    target = tmp_path / "file.txt"
+    target.write_text("content", encoding="utf-8")
+
+    opened: dict[str, str] = {}
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+    monkeypatch.setattr(os, "startfile", lambda p: opened.setdefault("path", p), raising=False)
+
+    result = module_open_path(target)
+    assert result["ok"] is True
+    assert opened["path"] == str(target.resolve(strict=False))

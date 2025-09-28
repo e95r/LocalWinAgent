@@ -2,9 +2,18 @@
 from __future__ import annotations
 
 import os
+import platform
 import re
 from pathlib import Path
 from typing import Any, Dict
+from uuid import UUID
+
+try:  # pragma: no cover - ctypes может отсутствовать в урезанных окружениях
+    import ctypes
+    from ctypes import wintypes
+except Exception:  # pragma: no cover
+    ctypes = None  # type: ignore
+    wintypes = None  # type: ignore
 
 try:  # pragma: no cover - в тестовой среде модуль может отсутствовать
     import yaml  # type: ignore
@@ -90,6 +99,97 @@ except ModuleNotFoundError:  # pragma: no cover
 
 _CONFIG_CACHE: Dict[str, Dict[str, Any]] = {}
 _PERCENT_VAR_RE = re.compile(r"%([^%]+)%")
+_TOKEN_VAR_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
+
+_KNOWN_FOLDER_IDS: Dict[str, str] = {
+    "DESKTOP": "B4BFCC3A-DB2C-424C-B029-7FE99A87C641",
+    "DOCUMENTS": "FDD39AD0-238F-46AF-ADB4-6C85480369C7",
+    "DOWNLOADS": "374DE290-123F-4565-9164-39C4925E467B",
+    "PICTURES": "33E28130-4E1E-4676-835A-98395C3BC3BB",
+    "VIDEOS": "18989B1D-99B5-455B-841C-AB7C74E4DDFC",
+}
+
+_FALLBACK_NAMES: Dict[str, str] = {
+    "DESKTOP": "Desktop",
+    "DOCUMENTS": "Documents",
+    "DOWNLOADS": "Downloads",
+    "PICTURES": "Pictures",
+    "VIDEOS": "Videos",
+}
+
+
+def _uuid_to_guid_struct(folder_id: str) -> "ctypes.Structure" | None:
+    """Создать структуру GUID из UUID."""
+
+    if ctypes is None or wintypes is None:  # pragma: no cover - защита от урезанных окружений
+        return None
+    try:
+        uuid_obj = UUID(folder_id)
+    except ValueError:
+        return None
+
+    class GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", wintypes.DWORD),
+            ("Data2", wintypes.WORD),
+            ("Data3", wintypes.WORD),
+            ("Data4", wintypes.BYTE * 8),
+        ]
+
+    data4 = (wintypes.BYTE * 8)(*uuid_obj.bytes[8:])
+    guid = GUID(uuid_obj.time_low, uuid_obj.time_mid, uuid_obj.time_hi_version, data4)
+    return guid
+
+
+def SHGetKnownFolderPath(folder_id: str) -> str | None:
+    """Получить путь к известной папке Windows через SHGetKnownFolderPath."""
+
+    if platform.system() != "Windows" or ctypes is None:  # pragma: no cover - не Windows
+        return None
+
+    guid = _uuid_to_guid_struct(folder_id)
+    if guid is None:
+        return None
+
+    try:
+        shell32 = ctypes.windll.shell32  # type: ignore[attr-defined]
+        ole32 = ctypes.windll.ole32  # type: ignore[attr-defined]
+    except AttributeError:  # pragma: no cover - редкий случай
+        return None
+
+    path_ptr = ctypes.c_wchar_p()
+    try:
+        result = shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(path_ptr))
+        if result != 0:
+            return None
+        return path_ptr.value
+    except Exception:  # pragma: no cover - защита от системных ошибок
+        return None
+    finally:
+        if getattr(path_ptr, "value", None):
+            try:
+                ole32.CoTaskMemFree(path_ptr)  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover - освобождение памяти может не потребоваться
+                pass
+
+
+def _build_known_paths() -> Dict[str, str]:
+    """Собрать словарь известных директорий."""
+
+    home = Path.home()
+    paths: Dict[str, str] = {}
+    for token, folder_id in _KNOWN_FOLDER_IDS.items():
+        resolved = SHGetKnownFolderPath(folder_id)
+        if not resolved:
+            fallback_name = _FALLBACK_NAMES.get(token, token.title())
+            resolved = str((home / fallback_name).resolve(strict=False))
+        else:
+            resolved = str(Path(resolved).resolve(strict=False))
+        paths[token] = resolved
+    return paths
+
+
+_KNOWN = _build_known_paths()
 
 
 def _expand_env(value: Any) -> Any:
@@ -104,6 +204,12 @@ def _expand_env(value: Any) -> Any:
             return os.environ.get(var_name, match.group(0))
 
         expanded = _PERCENT_VAR_RE.sub(_replace_percent, expanded)
+
+        def _replace_token(match: re.Match[str]) -> str:
+            key = match.group(1)
+            return _KNOWN.get(key, match.group(0))
+
+        expanded = _TOKEN_VAR_RE.sub(_replace_token, expanded)
         return expanded
     if isinstance(value, dict):
         return {key: _expand_env(item) for key, item in value.items()}
@@ -134,3 +240,6 @@ def load_config(name: str) -> Dict[str, Any]:
 def refresh_cache() -> None:
     """Очистить кеш конфигураций (используется в тестах)."""
     _CONFIG_CACHE.clear()
+
+
+__all__ = ["load_config", "refresh_cache", "SHGetKnownFolderPath", "_KNOWN"]
