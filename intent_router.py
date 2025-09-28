@@ -249,18 +249,42 @@ class IntentInferencer:
     OPEN_BROWSER_RE = re.compile(r"(?:открой|запусти|запустить|открыть)\s+(?:.*\s)?браузер", re.IGNORECASE)
     URL_RE = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
     CONTENT_RE = re.compile(r"(?:с\s+текстом|контент|текст(?:ом)?)\s+(?P<value>.+)", re.IGNORECASE)
-    TXT_PATH_PATTERN = r"(?P<path>\"[^\"]+?\\.txt\"|'[^']+?\\.txt'|«[^»]+?\\.txt»|[\w\s./\\:-]+?\\.txt)"
+    FILE_PATH_CORE = (
+        r"\"[^\"]+\.(?:txt|docx)\"|"
+        r"'[^']+\.(?:txt|docx)'|"
+        r"«[^»]+\.(?:txt|docx)»|"
+        r"[\w\s./\\:-а-яА-ЯёЁ]+?\.(?:txt|docx)"
+    )
+    FILE_PATH_PATTERN = rf"(?P<path>{FILE_PATH_CORE})"
     GENERATE_APPEND_PATTERNS = (
         re.compile(
-            rf"вставь\s+сгенерированн(?:ый|ого)\s+текст\s+в\s+{TXT_PATH_PATTERN}\s*[:：]\s*(?P<prompt>.+)",
+            rf"вставь\s+сгенерированн(?:ый|ого)\s+текст\s+в\s+{FILE_PATH_PATTERN}\s*[:：]\s*(?P<prompt>.+)",
             re.IGNORECASE,
         ),
         re.compile(
-            rf"сгенерируй\s+текст(?:\s+про)?\s+(?P<prompt>.+?)\s+(?:и\s+)?(?:добавь|вставь|запиши|дополни)\s+(?:его\s+)?(?:в|к)\s+{TXT_PATH_PATTERN}",
+            rf"сгенерируй\s+текст(?:\s+про|\s+о)?\s+(?P<prompt>.+?)\s+(?:и\s+)?(?:добавь|вставь|запиши|дополни)\s+(?:его\s+)?(?:в|к)\s+{FILE_PATH_PATTERN}",
             re.IGNORECASE,
         ),
         re.compile(
-            rf"дополни\s+текстовый\s+файл\s+{TXT_PATH_PATTERN}\s+сгенерированн(?:ым|ого)\s+текстом(?:\s+про)?\s+(?P<prompt>.+)",
+            rf"дополни\s+(?:текстовый\s+)?файл\s+{FILE_PATH_PATTERN}\s+сгенерированн(?:ым|ого)\s+текстом(?:\s+про|\s+о)?\s+(?P<prompt>.+)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            rf"добавь\s+(?:в|к)\s+(?:файл\s+)?{FILE_PATH_PATTERN}\s+(?:информац\w*|описание|текст)\s+(?:о|про)\s+(?P<prompt>.+)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            rf"открой\s+(?:файл\s+)?{FILE_PATH_PATTERN}\s+и\s+(?:вставь|добавь|запиши|дополни)\s+(?:в\s+него\s+)?(?:текст|описание|информац\w*)\s+(?:о|про)\s+(?P<prompt>.+)",
+            re.IGNORECASE,
+        ),
+    )
+    GENERATE_CREATE_PATTERNS = (
+        re.compile(
+            r"создай(?:те)?\s+(?:(?P<kind>текстов\w+|word|ворд|markdown|md)\s+)?файл"
+            r"(?:\s+(?:под\s+названием\s+)?(?P<path>\"[^\"]+\"|«[^»]+»|'[^']+'|[\w\s./\\:-а-яА-ЯёЁ]+))?"
+            r"(?:\s+и)?\s+(?:вставь|добавь|запиши|напиши|сгенерируй)"
+            r"(?:\s+в\s+него)?\s*(?:сгенерированн\w+)?\s*(?:текст|описание|информац\w*)"
+            r"(?:\s+(?:про|о)\s+|\s+)(?P<prompt>.+)",
             re.IGNORECASE,
         ),
     )
@@ -379,10 +403,6 @@ class IntentInferencer:
         edit_data = self._parse_edit_command(message)
         if edit_data:
             return edit_data
-
-        generate_append = self._parse_generate_txt_command(message)
-        if generate_append:
-            return generate_append
 
         match = self.WRITE_RE.search(message_core)
         if match:
@@ -541,17 +561,63 @@ class IntentInferencer:
             data["mode"] = "write"
         return data
 
-    def _parse_generate_txt_command(self, message: str) -> Optional[Dict[str, Any]]:
+    def _parse_generate_text_command(self, message: str) -> Optional[Dict[str, Any]]:
+        lowered = message.lower()
+        rewrite = any(marker in lowered for marker in REWRITE_MARKERS)
         for pattern in self.GENERATE_APPEND_PATTERNS:
             match = pattern.search(message)
             if not match:
                 continue
             raw_path = match.group("path").strip()
             prompt_raw = match.group("prompt").strip()
-            path = self._strip_quotes(raw_path.strip())
+            path = self._strip_quotes(raw_path)
             prompt = self._clean_generated_prompt(prompt_raw)
-            if path and prompt:
-                return {"intent": "generate_append_txt", "path": path, "prompt": prompt}
+            if not path or not prompt:
+                continue
+            kind = self._detect_kind(path)
+            ext = Path(path).suffix.lower()
+            if ext in KIND_BY_EXTENSION:
+                kind = KIND_BY_EXTENSION[ext]
+            operation = "write" if rewrite else "append"
+            return {
+                "intent": "generate_write_file",
+                "path": path,
+                "prompt": prompt,
+                "kind": kind,
+                "operation": operation,
+            }
+        for pattern in self.GENERATE_CREATE_PATTERNS:
+            match = pattern.search(message)
+            if not match:
+                continue
+            raw_path = match.group("path")
+            prompt_raw = (match.group("prompt") or "").strip()
+            if not prompt_raw:
+                continue
+            prompt = self._clean_generated_prompt(prompt_raw)
+            if not prompt:
+                continue
+            path = self._strip_quotes(raw_path.strip()) if raw_path else None
+            if path and not self._looks_like_path(path):
+                path = None
+            explicit_kind = match.group("kind")
+            kind = self._detect_kind(message)
+            if explicit_kind:
+                explicit_clean = self._strip_quotes(explicit_kind)
+                detected = self._detect_kind(explicit_clean)
+                if detected:
+                    kind = detected
+            if path:
+                ext = Path(path).suffix.lower()
+                if ext in KIND_BY_EXTENSION:
+                    kind = KIND_BY_EXTENSION[ext]
+            return {
+                "intent": "generate_write_file",
+                "path": path,
+                "prompt": prompt,
+                "kind": kind,
+                "operation": "create",
+            }
         return None
 
     def _detect_kind(self, message: str) -> Optional[str]:
@@ -631,6 +697,20 @@ class IntentInferencer:
     def _clean_token(self, token: str) -> str:
         stripped = token.strip().strip(",.;:")
         return self._strip_quotes(stripped)
+
+    def _clean_query(self, message: str) -> str:
+        cleaned = message.strip()
+        if not cleaned:
+            return ""
+        cleaned = re.sub(
+            r"^(?:найди|найти|поищи|поищем|ищи|покажи|показать|посмотри|посмотреть|нужен|нужна|нужны|хочу)\s+",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"\s+(?:в\s+интернете|в\s+сети)$", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"[\"'«»]", "", cleaned)
+        return cleaned.strip(" .?!")
 
     def _should_search_local(self, normalized: str) -> bool:
         return any(verb in normalized for verb in self.SEARCH_VERBS)
@@ -923,129 +1003,182 @@ class IntentRouter:
             return self._make_response(message, ok=True, data={"result": result})
         return self._make_response(message, ok=False, data={"result": result})
 
-    def _handle_refresh_apps(self) -> Dict[str, Any]:
-        result = self.apps.refresh_index()
-        if result.get("ok"):
-            count = int(result.get("count", 0))
-            self.intent_inferencer.app_aliases = get_aliases()
-            message = f"Готово, найдено {count} приложений"
-            return self._make_response(message, ok=True, data={"result": result})
-        error = result.get("error") or "Не удалось обновить список приложений"
-        return self._make_response(error, ok=False, data={"result": result})
+from typing import Dict, Any, Optional, List
+import time
 
-    def _handle_open_app(
-        self,
-        params: Dict[str, Any],
-        session_state: SessionState,
-    ) -> Dict[str, Any]:
-        name_raw = params.get("name") or params.get("app") or params.get("target")
-        if name_raw is None:
-            return self._make_response("Не указано приложение для открытия.", ok=False)
-        query = str(name_raw).strip()
-        if not query:
-            return self._make_response("Не указано приложение для открытия.", ok=False)
+# если у тебя IndexedEntry лежит в apps.py — раскомментируй следующую строку:
+from apps import IndexedEntry, get_aliases
 
-        from_context = bool(params.get("from_context"))
-        if from_context:
-            result = self.apps.launch(query)
-            return self._finalize_app_launch(result, session_state, from_context=True, fallback_name=query)
+def _handle_refresh_apps(self) -> Dict[str, Any]:
+    result = self.apps.refresh_index()
+    if result.get("ok"):
+        count = int(result.get("count", 0))
+        # обновляем алиасы в инференсере после пересканирования
+        self.intent_inferencer.app_aliases = get_aliases()
+        message = f"Готово, найдено {count} приложений"
+        return self._make_response(message, ok=True, data={"result": result})
+    error = result.get("error") or "Не удалось обновить список приложений"
+    return self._make_response(error, ok=False, data={"result": result})
 
-        ranked = self.apps.candidates(query, limit=5)
-        if ranked:
-            best = ranked[0]
-            second_score = ranked[1].score if len(ranked) > 1 else 0.0
-            confident = best.is_manual or (
-                best.score >= 80
-                and (
-                    len(ranked) == 1
-                    or best.is_manual
-                    or second_score < best.score - 5
-                )
-            )
-            if confident:
-                result = self.apps.launch_entry(best)
-                return self._finalize_app_launch(result, session_state, fallback_name=best.name)
-        if ranked:
-            names = [entry.name for entry in ranked[:5]]
-            session_state.set_results(names, "app")
-            listing = self._format_app_options(ranked[:5])
-            reply = "Нашёл несколько приложений:\n" + listing + "\nНазовите номер или точное название."
-            return self._make_response(reply, ok=False, items=names)
+def _handle_open_app(
+    self,
+    params: Dict[str, Any],
+    session_state: "SessionState",
+) -> Dict[str, Any]:
+    name_raw = params.get("name") or params.get("app") or params.get("target")
+    if name_raw is None:
+        return self._make_response("Не указано приложение для открытия.", ok=False)
+    query = str(name_raw).strip()
+    if not query:
+        return self._make_response("Не указано приложение для открытия.", ok=False)
 
+    from_context = bool(params.get("from_context"))
+    if from_context:
         result = self.apps.launch(query)
-        if not result.get("ok") and result.get("error") == "ambiguous":
-            raw_options = result.get("candidates") or []
-            options = [str(name) for name in raw_options if name]
-            if options:
-                session_state.set_results(options, "app")
-                listing = "\n".join(f"{idx + 1}) {name}" for idx, name in enumerate(options))
-                reply = "Нашёл несколько приложений:\n" + listing + "\nНазовите номер или точное название."
-                return self._make_response(reply, ok=False, items=options)
-        return self._finalize_app_launch(result, session_state, fallback_name=query)
+        return self._finalize_app_launch(result, session_state, from_context=True, fallback_name=query)
 
-    def _finalize_app_launch(
-        self,
-        result: Dict[str, Any],
-        session_state: SessionState,
-        *,
-        from_context: bool = False,
-        fallback_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        message = result.get("message") or result.get("error") or "Не удалось открыть приложение"
-        ok = bool(result.get("ok"))
-        if ok:
-            launched = result.get("launched") or fallback_name
-            if launched:
-                if from_context:
-                    session_state.last_updated = time.time()
-                else:
-                    session_state.set_results([str(launched)], "app")
-        data = {"result": result}
-        return self._make_response(message, ok=ok, data=data)
+    ranked: List[IndexedEntry] = self.apps.candidates(query, limit=5)
+    if ranked:
+        best = ranked[0]
+        second_score = ranked[1].score if len(ranked) > 1 else 0.0
+        confident = best.is_manual or (
+            best.score >= 80
+            and (
+                len(ranked) == 1
+                or best.is_manual
+                or second_score < best.score - 5
+            )
+        )
+        if confident:
+            result = self.apps.launch_entry(best)
+            return self._finalize_app_launch(result, session_state, fallback_name=best.name)
 
-    @staticmethod
-    def _format_app_options(options: List[IndexedEntry]) -> str:
-        label_map = {
-            "common": "общая папка",
-            "user": "личная папка",
-            "manual": "ручной список",
-        }
-        lines: List[str] = []
-        for idx, entry in enumerate(options, start=1):
-            if entry.is_manual:
-                source = label_map["manual"]
+    if ranked:
+        names = [entry.name for entry in ranked[:5]]
+        session_state.set_results(names, "app")
+        listing = self._format_app_options(ranked[:5])
+        reply = "Нашёл несколько приложений:\n" + listing + "\nНазовите номер или точное название."
+        return self._make_response(reply, ok=False, items=names)
+
+    # как fallback — попытка прямого запуска по названию
+    result = self.apps.launch(query)
+    if not result.get("ok") and result.get("error") == "ambiguous":
+        raw_options = result.get("candidates") or []
+        options = [str(name) for name in raw_options if name]
+        if options:
+            session_state.set_results(options, "app")
+            listing = "\n".join(f"{idx + 1}) {name}" for idx, name in enumerate(options))
+            reply = "Нашёл несколько приложений:\n" + listing + "\nНазовите номер или точное название."
+            return self._make_response(reply, ok=False, items=options)
+
+    return self._finalize_app_launch(result, session_state, fallback_name=query)
+
+def _finalize_app_launch(
+    self,
+    result: Dict[str, Any],
+    session_state: "SessionState",
+    *,
+    from_context: bool = False,
+    fallback_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    message = result.get("message") or result.get("error") or "Не удалось открыть приложение"
+    ok = bool(result.get("ok"))
+    if ok:
+        launched = result.get("launched") or fallback_name
+        if launched:
+            if from_context:
+                session_state.last_updated = time.time()
             else:
-                source = label_map.get(entry.source, entry.source)
-            suffix = f" — {source}" if source else ""
-            lines.append(f"{idx}) {entry.name}{suffix}")
-        return "\n".join(lines)
+                session_state.set_results([str(launched)], "app")
+    data = {"result": result}
+    return self._make_response(message, ok=ok, data=data)
 
-    def _handle_generate_append_txt(
+@staticmethod
+def _format_app_options(options: List["IndexedEntry"]) -> str:
+    label_map = {
+        "common": "общая папка",
+        "user": "личная папка",
+        "manual": "ручной список",
+    }
+    lines: List[str] = []
+    for idx, entry in enumerate(options, start=1):
+        if entry.is_manual:
+            source = label_map["manual"]
+        else:
+            source = label_map.get(entry.source, entry.source)
+        suffix = f" — {source}" if source else ""
+        lines.append(f"{idx}) {entry.name}{suffix}")
+    return "\n".join(lines)
         self,
         params: Dict[str, Any],
         session: AgentSession,
         session_state: SessionState,
         confirmed: bool,
     ) -> Dict[str, Any]:
-        path_value = params.get("path")
         prompt_value = params.get("prompt")
-        if not path_value:
-            return self._make_response("Не удалось определить файл для дополнения.", ok=False)
         if not prompt_value:
             return self._make_response("Не удалось понять запрос для генерации текста.", ok=False)
+
+        path_value = params.get("path")
+        operation = str(params.get("operation") or "append")
+        kind_value = params.get("kind")
+
+        if not path_value and operation != "create":
+            return self._make_response("Не удалось определить файл для обновления.", ok=False)
+
         try:
             model = getattr(session, "model", None)
             generated = self.llm.generate(str(prompt_value), model=model)
         except Exception as exc:  # pragma: no cover - внешние ошибки клиента LLM
             logger.exception("Ошибка генерации текста: %s", exc)
             return self._make_response(f"Ошибка генерации текста: {exc}", ok=False)
+
         if not generated or not str(generated).strip():
             return self._make_response("Модель не вернула текст для вставки.", ok=False)
-        text_to_append = str(generated)
-        if text_to_append and not text_to_append.endswith("\n"):
-            text_to_append += "\n"
-        info = self.file_manager.append_text(str(path_value), content=text_to_append, confirmed=confirmed)
-        requires_confirmation = bool(info.get("requires_confirmation"))
+
+        text_to_write = str(generated)
+        file_kind = (kind_value or "").lower() if isinstance(kind_value, str) else None
+
+        target_path = str(path_value) if path_value else None
+        if target_path:
+            ext = Path(target_path).suffix.lower()
+            if ext in KIND_BY_EXTENSION:
+                file_kind = KIND_BY_EXTENSION[ext]
+        if not file_kind:
+            file_kind = DEFAULT_KIND
+
+        if not target_path:
+            ext = FILE_KIND_EXT.get(file_kind, FILE_KIND_EXT[DEFAULT_KIND])
+            desktop = self.file_manager.default_root
+            target_path = str((desktop / f"generated_{int(time.time())}{ext}").resolve(strict=False))
+
+        if file_kind != "docx" and text_to_write and not text_to_write.endswith("\n"):
+            text_to_write += "\n"
+
+        if file_kind == "docx":
+            if operation == "append":
+                info = self.file_manager.edit_word(target_path, content=text_to_write, confirmed=confirmed)
+            else:
+                info = self.file_manager.create_file(
+                    target_path,
+                    content=text_to_write,
+                    kind="docx",
+                    confirmed=confirmed,
+                )
+        else:
+            if operation == "create":
+                info = self.file_manager.create_file(
+                    target_path,
+                    content=text_to_write,
+                    kind=file_kind,
+                    confirmed=confirmed,
+                )
+            elif operation == "write":
+                info = self.file_manager.write_text(target_path, content=text_to_write, confirmed=confirmed)
+            else:
+                info = self.file_manager.append_text(target_path, content=text_to_write, confirmed=confirmed)
+
+        requires_confirmation = bool(info.get("requires_confirmation")) if isinstance(info, dict) else False
         if not info.get("ok"):
             message = info.get("error") or "Не удалось обновить файл."
             return self._make_response(
@@ -1054,13 +1187,22 @@ class IntentRouter:
                 data={"file": info},
                 requires_confirmation=requires_confirmation,
             )
-        destination = str(info.get("path") or self.file_manager.normalize(str(path_value)))
+
+        destination = str(info.get("path") or self.file_manager.normalize(target_path))
         session_state.set_results([destination], "file")
-        reply = f"Я вставил сгенерированный текст в {destination}."
+
+        if operation == "create":
+            action_text = "создал"
+        elif operation == "write":
+            action_text = "перезаписал"
+        else:
+            action_text = "дополнил"
+
+        reply = f"Я {action_text} {destination} сгенерированным текстом."
         return self._make_response(
             reply,
             ok=True,
-            data={"file": info, "generated": text_to_append},
+            data={"file": info, "generated": text_to_write},
             requires_confirmation=requires_confirmation,
         )
 
@@ -1097,8 +1239,8 @@ class IntentRouter:
         if intent == "open_file":
             return self._handle_open_file(params, session_state)
 
-        if intent == "generate_append_txt":
-            return self._handle_generate_append_txt(params, session, session_state, confirmed)
+        if intent == "generate_write_file":
+            return self._handle_generate_write_file(params, session, session_state, confirmed)
 
         prepared, confirmation_response = self._prepare_params(intent, params, session, confirmed)
         if confirmation_response is not None:
