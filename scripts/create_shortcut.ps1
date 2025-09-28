@@ -1,30 +1,16 @@
-# scripts/create_shortcut.ps1
-# Создаёт ярлык "LocalWinAgent Chat.lnk" на рабочем столе, который запускает start_agent.ps1
-
 $ErrorActionPreference = "Stop"
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = Resolve-Path (Join-Path $scriptDir "..")
+$desktop = [Environment]::GetFolderPath("Desktop")
+$shortcutPath = Join-Path $desktop "LocalWinAgent.lnk"
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Root = Join-Path $ScriptDir ".."
-$StartScript = Join-Path $ScriptDir "start_agent.ps1"
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = "powershell.exe"
+$shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$projectRoot\scripts\start_agent.ps1`""
+$shortcut.WorkingDirectory = $projectRoot
+$shortcut.Description = "Запуск локального ассистента LocalWinAgent"
+$shortcut.IconLocation = "C:\\Windows\\System32\\shell32.dll,42"
+$shortcut.Save()
 
-if (!(Test-Path $StartScript)) {
-    Write-Error "Не найден scripts\start_agent.ps1"
-}
-
-$WshShell = New-Object -ComObject WScript.Shell
-$Desktop = [Environment]::GetFolderPath("Desktop")
-$ShortcutPath = Join-Path $Desktop "LocalWinAgent Chat.lnk"
-
-# Запуск через PowerShell с обходом ExecutionPolicy, чтобы не просило руками запускать.
-$Target = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-$Args = "-ExecutionPolicy Bypass -File `"$StartScript`""
-
-$Shortcut = $WshShell.CreateShortcut($ShortcutPath)
-$Shortcut.TargetPath = $Target
-$Shortcut.Arguments = $Args
-$Shortcut.WorkingDirectory = $Root
-$Shortcut.WindowStyle = 7
-$Shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,44"
-$Shortcut.Save()
-
-Write-Host "Ярлык создан: $ShortcutPath"
+Write-Host "Ярлык создан: $shortcutPath" -ForegroundColor Green

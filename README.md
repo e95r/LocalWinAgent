@@ -1,2 +1,140 @@
 # LocalWinAgent
 
+LocalWinAgent — локальный ИИ-ассистент для Windows 10/11 с веб-интерфейсом и CLI. Проект использует Ollama для генерации ответов, FastAPI для серверной части и набор встроенных инструментов для работы с файлами, приложениями и вебом.
+
+## Возможности
+
+- Общение через веб-чат по адресу [http://127.0.0.1:8765/chat](http://127.0.0.1:8765/chat).
+- CLI с историей команд, автодополнением и подтверждением опасных действий.
+- Управление приложениями (Блокнот, VS Code, Word, Excel, Chrome).
+- Поиск файлов через Everything (`es.exe`).
+- Автоматизация браузера через Playwright (поиск и открытие страниц).
+- Контроль доступа к файловой системе с белым списком путей и подтверждениями.
+
+## Предварительные требования
+
+1. **Windows 10/11**.
+2. **Python 3.11**: [скачать с python.org](https://www.python.org/downloads/windows/). При установке отметьте «Add Python to PATH».
+3. **Git**: [скачать](https://git-scm.com/download/win).
+4. **Ollama**:
+   - Установите [Ollama для Windows](https://ollama.com/download).
+   - После установки в PowerShell выполните:
+     ```powershell
+     ollama pull llama3.1:8b
+     ollama pull qwen2:7b
+     ```
+5. **Everything** от Voidtools:
+   - Скачайте и установите [Everything](https://www.voidtools.com/downloads/).
+   - В настройках Everything включите «Путь к es.exe» или добавьте каталог установки в `PATH`.
+6. **Playwright**: будет установлен вместе с зависимостями Python (см. ниже).
+
+## Установка проекта
+
+```powershell
+# Клонирование репозитория
+git clone https://example.com/LocalWinAgent.git
+cd LocalWinAgent
+
+# Создание виртуального окружения
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# Установка зависимостей
+pip install -r requirements.txt
+
+# Установка браузеров Playwright
+playwright install
+```
+
+> Если команда `playwright` недоступна, запустите `python -m playwright install`.
+
+## Быстрый запуск через ярлык
+
+1. Выполните в каталоге проекта:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\create_shortcut.ps1
+   ```
+2. На рабочем столе появится ярлык **LocalWinAgent**. Двойной клик запустит сервер и откроет чат в браузере (используется `scripts\start_agent.ps1`).
+
+## Ручной запуск
+
+### Запуск сервера и веб-чата
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn main:app --host 127.0.0.1 --port 8765
+# Откройте http://127.0.0.1:8765/chat в браузере
+```
+
+### Запуск CLI
+```powershell
+.\.venv\Scripts\Activate.ps1
+python agent_cli.py
+```
+
+Команды CLI:
+- `открой текстовый редактор`
+- `найди файл отчёт по продажам 2023`
+- `закрой excel`
+- `найди страницу fastapi background tasks и открой`
+- `:auto on` / `:auto off` — включить/выключить автоподтверждение
+- `:model qwen2:7b` — переключение модели Ollama
+
+## Структура проекта
+
+```
+LocalWinAgent/
+├── agent_cli.py
+├── config/
+│   ├── apps.yml
+│   ├── paths.yml
+│   └── web.yml
+├── frontend/
+│   └── chat/
+│       └── index.html
+├── intent_router.py
+├── logs/
+├── main.py
+├── requirements.txt
+├── scripts/
+│   ├── create_shortcut.ps1
+│   └── start_agent.ps1
+├── tests/
+│   ├── test_configs.py
+│   ├── test_fuzzy.py
+│   └── test_router.py
+└── tools/
+    ├── __init__.py
+    ├── apps.py
+    ├── files.py
+    ├── search.py
+    └── web.py
+```
+
+## Журналирование
+
+- Консольные сообщения форматируются через `rich`.
+- Файл логов сохраняется в `logs/agent.log`.
+
+## Примечания по безопасности
+
+- Все операции с файлами вне белого списка из `config/paths.yml` требуют явного подтверждения.
+- Массовые операции (удаление каталогов) выполняются только после подтверждения или при включенном автоподтверждении.
+
+## Тестирование
+
+Проект содержит тесты на pytest:
+```powershell
+.\.venv\Scripts\Activate.ps1
+pytest
+```
+
+## Часто используемые команды
+
+- «Открой текстовый редактор» — запустит Блокнот.
+- «Найди файл отчёт по продажам 2023» — выполнит поиск через Everything.
+- «Закрой Excel» — завершит процесс Excel.
+- «Найди страницу fastapi background tasks и открой» — откроет поисковую выдачу в браузере.
+
+## Поддержка
+
+В случае вопросов создавайте issue в репозитории или пишите в команду сопровождения.

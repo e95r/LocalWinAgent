@@ -1,0 +1,4 @@
+# Настройки веб-автоматизации через Playwright
+browser: "chromium"
+headless: false
+implicit_wait_ms: 1500

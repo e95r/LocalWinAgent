@@ -1,31 +1,36 @@
-# scripts/start_agent.ps1
-# Запускает LocalWinAgent, если возможно активирует venv, поднимает uvicorn и открывает чат в браузере.
+param(
+    [switch]$NoBrowser
+)
 
 $ErrorActionPreference = "Stop"
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = Resolve-Path (Join-Path $scriptDir "..")
+Set-Location $projectRoot
 
-# Перейдём в корень проекта (скрипт лежит в scripts/)
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Root = Join-Path $ScriptDir ".."
-Set-Location $Root
+Write-Host "Запуск LocalWinAgent..." -ForegroundColor Cyan
 
-# Активируем venv если есть
-$VenvActivate = Join-Path $Root ".venv\Scripts\Activate.ps1"
-if (Test-Path $VenvActivate) {
-    . $VenvActivate
+$python = "python"
+$arguments = @("-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8765")
+
+$process = Start-Process -FilePath $python -ArgumentList $arguments -WorkingDirectory $projectRoot -PassThru -WindowStyle Hidden
+Start-Sleep -Seconds 3
+
+if (-not $NoBrowser) {
+    Start-Process "http://127.0.0.1:8765/chat"
 }
 
-# Проверим, что есть main.py
-if (!(Test-Path (Join-Path $Root "main.py"))) {
-    Write-Error "Файл main.py не найден."
+Write-Host "Агент запущен. Нажмите Ctrl+C для остановки." -ForegroundColor Green
+
+try {
+    Wait-Process -Id $process.Id
 }
-
-# Адрес
-$Addr = "http://127.0.0.1:8765/chat"
-
-# Старт uvicorn (в фоне)
-Start-Process -WindowStyle Hidden -FilePath "python" -ArgumentList " -m uvicorn main:app --host 127.0.0.1 --port 8765" | Out-Null
-
-# Подождём 1.5 сек и откроем браузер
-Start-Sleep -Seconds 2
-Start-Process $Addr
-Write-Host "LocalWinAgent запущен. Открылся чат: $Addr"
+finally {
+    if (-not $process.HasExited) {
+        $process.CloseMainWindow() | Out-Null
+        Start-Sleep -Seconds 1
+        if (-not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force
+        }
+    }
+    Write-Host "LocalWinAgent остановлен." -ForegroundColor Yellow
+}

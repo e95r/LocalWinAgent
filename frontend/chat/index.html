@@ -1,96 +1,241 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8">
-  <title>LocalWinAgent — Чат</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    html,body { margin:0; padding:0; height:100%; font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif; background:#0b0f14; color:#e6edf3; }
-    .wrap { display:flex; flex-direction:column; height:100%; max-width:900px; margin:0 auto; }
-    header { padding:16px 20px; border-bottom:1px solid #1f2937; position:sticky; top:0; background:#0b0f14; z-index:10; }
-    header h1 { margin:0; font-size:20px; }
-    .log { flex:1; overflow:auto; padding:16px 20px; }
-    .msg { margin-bottom:14px; line-height:1.45; }
-    .msg.you { color:#cbd5e1; }
-    .msg.bot { color:#e6edf3; }
-    .bubble { display:inline-block; padding:10px 12px; border-radius:12px; background:#111827; border:1px solid #1f2937; }
-    .you .bubble { background:#0f172a; }
-    .bot .bubble { background:#111827; }
-    .meta { font-size:12px; color:#9ca3af; margin-top:4px; }
-    .input { display:flex; gap:10px; padding:16px 20px; border-top:1px solid #1f2937; background:#0b0f14; }
-    .input input[type="text"] { flex:1; padding:12px; border-radius:10px; border:1px solid #374151; background:#0f172a; color:#e6edf3; outline:none; }
-    .input button { padding:12px 16px; border-radius:10px; border:1px solid #374151; background:#111827; color:#e6edf3; cursor:pointer; }
-    .input label { font-size:12px; color:#cbd5e1; display:flex; align-items:center; gap:6px; }
-    .status { font-size:12px; color:#9ca3af; padding:0 20px 10px; }
-    a { color:#60a5fa; text-decoration:none; }
-    a:hover { text-decoration:underline; }
-  </style>
+    <meta charset="UTF-8" />
+    <title>LocalWinAgent — чат</title>
+    <style>
+        body {
+            font-family: "Segoe UI", sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #f4f6f9;
+            color: #222;
+        }
+        header {
+            background: #005fb8;
+            color: #fff;
+            padding: 16px 24px;
+        }
+        header h1 {
+            margin: 0;
+            font-size: 20px;
+        }
+        main {
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 120px);
+            padding: 16px;
+        }
+        #messages {
+            flex: 1;
+            background: #fff;
+            border-radius: 12px;
+            padding: 16px;
+            overflow-y: auto;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+        }
+        .message {
+            margin-bottom: 12px;
+        }
+        .message.user {
+            text-align: right;
+        }
+        .message.agent {
+            text-align: left;
+        }
+        .bubble {
+            display: inline-block;
+            padding: 10px 14px;
+            border-radius: 14px;
+            max-width: 70%;
+            white-space: pre-wrap;
+        }
+        .user .bubble {
+            background: #005fb8;
+            color: #fff;
+            border-bottom-right-radius: 0;
+        }
+        .agent .bubble {
+            background: #e9ecf1;
+            color: #222;
+            border-bottom-left-radius: 0;
+        }
+        form {
+            margin-top: 16px;
+            display: flex;
+            gap: 12px;
+        }
+        textarea {
+            flex: 1;
+            resize: none;
+            border: 1px solid #d0d7de;
+            border-radius: 10px;
+            padding: 12px;
+            font-size: 15px;
+            height: 80px;
+        }
+        button {
+            background: #005fb8;
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            padding: 12px 20px;
+            font-size: 15px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        button:hover {
+            background: #004a90;
+        }
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            gap: 16px;
+        }
+        .controls label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+        }
+        select {
+            padding: 6px 10px;
+            border-radius: 8px;
+            border: 1px solid #d0d7de;
+        }
+        #status {
+            font-size: 12px;
+            color: #555;
+        }
+        #confirm-container {
+            margin-top: 8px;
+            display: none;
+        }
+        #confirm-container button {
+            margin-right: 8px;
+        }
+    </style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <h1>LocalWinAgent — Локальный чат</h1>
-      <div class="status" id="status">Подключение…</div>
-    </header>
-
-    <div id="log" class="log" aria-live="polite" aria-label="История сообщений"></div>
-
-    <form id="form" class="input" autocomplete="off">
-      <input id="text" type="text" placeholder="Например: Открой текстовый редактор" aria-label="Сообщение">
-      <label title="Выполнять потенциально опасные действия без вопросов">
-        <input id="yes" type="checkbox"> автоподтверждение
-      </label>
-      <button id="send" type="submit">Отправить</button>
+<header>
+    <h1>LocalWinAgent — локальный ассистент</h1>
+</header>
+<main>
+    <div class="controls">
+        <label>
+            <input type="checkbox" id="autoConfirm" />
+            Автоподтверждение действий
+        </label>
+        <label>
+            Модель:
+            <select id="modelSelect">
+                <option value="llama3.1:8b" selected>llama3.1:8b</option>
+                <option value="qwen2:7b">qwen2:7b</option>
+            </select>
+        </label>
+        <span id="status">Ожидание подключения…</span>
+    </div>
+    <div id="messages"></div>
+    <div id="confirm-container">
+        <button id="confirm-button">Подтвердить</button>
+        <button id="reject-button">Отменить</button>
+    </div>
+    <form id="chat-form">
+        <textarea id="message" placeholder="Введите команду или вопрос"></textarea>
+        <button type="submit">Отправить</button>
     </form>
-  </div>
+</main>
+<script>
+    const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+    const socket = new WebSocket(wsUrl);
+    const messagesEl = document.getElementById('messages');
+    const formEl = document.getElementById('chat-form');
+    const messageInput = document.getElementById('message');
+    const autoConfirmEl = document.getElementById('autoConfirm');
+    const statusEl = document.getElementById('status');
+    const confirmContainer = document.getElementById('confirm-container');
+    const confirmButton = document.getElementById('confirm-button');
+    const rejectButton = document.getElementById('reject-button');
+    const modelSelect = document.getElementById('modelSelect');
 
-  <script>
-    const log = document.getElementById('log');
-    const form = document.getElementById('form');
-    const input = document.getElementById('text');
-    const yes = document.getElementById('yes');
-    const status = document.getElementById('status');
+    let requiresConfirmation = false;
 
-    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+    socket.addEventListener('open', () => {
+        statusEl.textContent = 'Подключено';
+    });
+
+    socket.addEventListener('close', () => {
+        statusEl.textContent = 'Соединение закрыто';
+    });
+
+    socket.addEventListener('error', () => {
+        statusEl.textContent = 'Ошибка WebSocket';
+    });
+
+    socket.addEventListener('message', (event) => {
+        const data = JSON.parse(event.data);
+        addMessage('agent', data.response);
+        requiresConfirmation = data.requires_confirmation;
+        confirmContainer.style.display = requiresConfirmation ? 'flex' : 'none';
+    });
 
     function addMessage(role, text) {
-      const item = document.createElement('div');
-      item.className = 'msg ' + role;
-      const bubble = document.createElement('div');
-      bubble.className = 'bubble';
-      bubble.textContent = text;
-      const meta = document.createElement('div');
-      meta.className = 'meta';
-      meta.textContent = role === 'you' ? 'Вы' : 'Агент';
-      item.appendChild(bubble);
-      item.appendChild(meta);
-      log.appendChild(item);
-      log.scrollTop = log.scrollHeight;
+        const wrapper = document.createElement('div');
+        wrapper.className = `message ${role}`;
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        bubble.textContent = text;
+        wrapper.appendChild(bubble);
+        messagesEl.appendChild(wrapper);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
-    ws.onopen = () => { status.textContent = 'Подключено'; };
-    ws.onclose = () => { status.textContent = 'Отключено'; };
-    ws.onerror = () => { status.textContent = 'Ошибка соединения'; };
-
-    ws.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data);
-        const answer = (typeof data.answer === 'string') ? data.answer : JSON.stringify(data, null, 2);
-        addMessage('bot', answer);
-      } catch (e) {
-        addMessage('bot', 'Нераспознанный ответ: ' + ev.data);
-      }
-    };
-
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const text = input.value.trim();
-      if (!text) return;
-      addMessage('you', text);
-      ws.send(JSON.stringify({ text, yes: yes.checked }));
-      input.value = '';
-      input.focus();
+    formEl.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const text = messageInput.value.trim();
+        if (!text) {
+            return;
+        }
+        addMessage('user', text);
+        socket.send(JSON.stringify({
+            message: text,
+            auto_confirm: autoConfirmEl.checked,
+            confirm: false,
+            model: modelSelect.value
+        }));
+        messageInput.value = '';
     });
-  </script>
+
+    confirmButton.addEventListener('click', () => {
+        if (!requiresConfirmation) {
+            return;
+        }
+        socket.send(JSON.stringify({
+            message: 'да',
+            auto_confirm: autoConfirmEl.checked,
+            confirm: true,
+            model: modelSelect.value
+        }));
+        confirmContainer.style.display = 'none';
+        requiresConfirmation = false;
+    });
+
+    rejectButton.addEventListener('click', () => {
+        if (!requiresConfirmation) {
+            return;
+        }
+        addMessage('user', 'нет');
+        socket.send(JSON.stringify({
+            message: 'нет',
+            auto_confirm: autoConfirmEl.checked,
+            confirm: false,
+            model: modelSelect.value
+        }));
+        confirmContainer.style.display = 'none';
+        requiresConfirmation = false;
+    });
+</script>
 </body>
 </html>
