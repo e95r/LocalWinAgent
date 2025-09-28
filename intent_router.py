@@ -27,12 +27,28 @@ except ModuleNotFoundError:  # pragma: no cover
             return SequenceMatcher(None, a, b).ratio() * 100
 
     fuzz = _FallbackFuzz()  # type: ignore
-from tools.files import FileManager, get_desktop_path
+from tools.files import FileManager, get_desktop_path, FILE_TYPE_EXT, FILE_KIND_EXT
 from tools import search as search_tools
 from tools.llm_client import OllamaClient
 
 logger = logging.getLogger(__name__)
 
+
+KIND_BY_EXTENSION = {ext: kind for kind, ext in FILE_KIND_EXT.items()}
+FILE_KIND_ALIASES = {
+    alias: KIND_BY_EXTENSION.get(ext)
+    for alias, ext in FILE_TYPE_EXT.items()
+    if ext in KIND_BY_EXTENSION
+}
+FILE_REFERENCE_TOKENS = {
+    "файл", "файла", "файлу", "файлом", "файле",
+    "документ", "документа", "документу", "документом", "документе",
+    "презентация", "презентацию", "презентации", "презентацией",
+    "таблица", "таблицу", "таблицы", "таблицей",
+    "document", "file", "presentation", "spreadsheet"
+}
+DEFAULT_KIND = "txt"
+REWRITE_MARKERS = {"перепиш", "перезапиш", "замени"}
 
 CREATE_FILE_CODE = """
 from tools.files import FileManager
@@ -336,6 +352,10 @@ class IntentInferencer:
         if create_data:
             return create_data
 
+        edit_data = self._parse_edit_command(message)
+        if edit_data:
+            return edit_data
+
         match = self.WRITE_RE.search(message_core)
         if match:
             path = match.group("path")
@@ -432,90 +452,118 @@ class IntentInferencer:
             return trimmed[1:-1]
         return trimmed
 
+
+
     def _parse_create_command(self, message: str) -> Optional[Dict[str, Any]]:
-        message_core = message.strip().rstrip(" ?!.")
+        normalized_message = message.strip()
+        if not re.search(r"созда[йте]", normalized_message, re.IGNORECASE):
+            return None
         content = self._extract_content(message)
+        kind = self._detect_kind(normalized_message)
+        explicit_path = self._extract_explicit_path(message, kind)
+        message_core = normalized_message.rstrip(" ?!.")
+        if not explicit_path:
+            direct = self.CREATE_RE.search(message_core)
+            if direct:
+                raw_path = direct.group("path").strip()
+                if self._looks_like_path(raw_path):
+                    explicit_path = raw_path
+        if explicit_path:
+            ext = Path(explicit_path).suffix.lower()
+            if ext in KIND_BY_EXTENSION:
+                kind = KIND_BY_EXTENSION[ext]
+        if not explicit_path:
+            ext = FILE_KIND_EXT.get(kind or DEFAULT_KIND, FILE_KIND_EXT[DEFAULT_KIND])
+            desktop = get_desktop_path().resolve(strict=False)
+            generated = desktop / f"new_{int(time.time())}{ext}"
+            explicit_path = str(generated)
+        return {
+            "intent": "create_file",
+            "path": explicit_path,
+            "content": content,
+            "kind": kind,
+        }
 
-        direct = self.CREATE_RE.search(message_core)
-        if direct:
-            raw_path = direct.group("path").strip()
-            if self._looks_like_path(raw_path):
-                extension = self._detect_extension_hint(message_core)
-                normalized_path = self._apply_extension(raw_path, extension)
-                return {"intent": "create_file", "path": normalized_path, "content": content}
-
-        match = re.search(r"создай(?:те)?\s+(?P<body>.+)", message_core, re.IGNORECASE)
-        if not match:
+    def _parse_edit_command(self, message: str) -> Optional[Dict[str, Any]]:
+        if not re.search(r"(отредактируй|дополни|добавь)", message, re.IGNORECASE):
             return None
-        body = match.group("body").strip()
-        base = self._strip_content_markers(body)
-        extension, remainder = self._remove_type_keyword(base)
-        name = self._extract_name_candidate(remainder)
-        if not name:
+        kind = self._detect_kind(message)
+        path = self._extract_explicit_path(message, kind)
+        if not path:
             return None
-        normalized_path = self._apply_extension(name, extension or self._detect_extension_hint(message_core))
-        if not normalized_path:
-            return None
-        return {"intent": "create_file", "path": normalized_path, "content": content}
+        ext = Path(path).suffix.lower()
+        if ext in KIND_BY_EXTENSION:
+            kind = KIND_BY_EXTENSION[ext]
+        content = self._extract_content(message)
+        data: Dict[str, Any] = {
+            "intent": "edit_file",
+            "path": path,
+            "content": content,
+            "kind": kind,
+        }
+        cell = self._extract_cell_reference(message)
+        if cell:
+            data["cell"] = cell.upper()
+        normalized = message.lower()
+        if any(marker in normalized for marker in REWRITE_MARKERS):
+            data["mode"] = "write"
+        return data
 
-    def _strip_content_markers(self, text: str) -> str:
-        lowered = text.lower()
-        for marker in (" с текстом", " со содержим", " с содержим", " с контент", " с описанием"):
-            idx = lowered.find(marker)
-            if idx != -1:
-                return text[:idx].strip()
-        parts = re.split(r":\s+", text, maxsplit=1)
-        remainder = parts[0] if len(parts) == 2 else text
-        return remainder.strip()
-
-    def _remove_type_keyword(self, text: str) -> tuple[Optional[str], str]:
-        lowered = text.lower()
-        for keyword in sorted(self.TYPE_KEYWORDS, key=len, reverse=True):
-            pattern = re.compile(rf"\b{re.escape(keyword)}\b", re.IGNORECASE)
-            if pattern.search(lowered):
-                cleaned = pattern.sub(" ", text, count=1)
-                return self.TYPE_KEYWORDS[keyword], cleaned
-        return None, text
-
-    def _extract_name_candidate(self, text: str) -> str:
-        quoted = re.search(r'["\'«»](.+?)["\'«»]', text)
-        if quoted:
-            return quoted.group(1).strip()
-        cleaned = re.sub(r'["\'«»]', ' ', text)
-        cleaned = re.sub(r"под\s+названием", " ", cleaned, flags=re.IGNORECASE)
-        tokens = [token for token in re.split(r"\s+", cleaned) if token]
-        filtered = [token for token in tokens if token.lower() not in self.NAME_STOPWORDS]
-        return " ".join(filtered).strip()
-
-    def _detect_extension_hint(self, text: str) -> Optional[str]:
-        lowered = text.lower()
-        for keyword in sorted(self.TYPE_KEYWORDS, key=len, reverse=True):
-            pattern = re.compile(rf"\b{re.escape(keyword)}\b", re.IGNORECASE)
-            if pattern.search(lowered):
-                return self.TYPE_KEYWORDS[keyword]
+    def _detect_kind(self, message: str) -> Optional[str]:
+        lowered = message.lower()
+        for keyword, mapped in FILE_KIND_ALIASES.items():
+            if mapped and re.search(rf"\b{re.escape(keyword)}\b", lowered):
+                return mapped
         return None
 
-    def _apply_extension(self, path: str, extension: Optional[str]) -> str:
-        normalized = self._strip_quotes(path).strip()
-        if not normalized:
-            return normalized
-        try:
-            suffix = Path(normalized).suffix
-        except Exception:  # pragma: no cover - Path может не справиться с экзотикой
-            suffix = ""
-        if suffix:
-            return normalized
-        if extension:
-            return normalized + extension
-        return normalized
+    def _extract_cell_reference(self, message: str) -> Optional[str]:
+        match = re.search(r"ячейк[аеуы]\s+(?P<cell>[A-Za-z]+\d+)", message, re.IGNORECASE)
+        if match:
+            return match.group("cell")
+        return None
 
-    def _clean_query(self, message: str) -> str:
-        cleaned = re.sub(r"^(?:найди|найти|покажи|посмотри|посмотреть|ищи|мне\s+нужен|мне\s+нужна|нужен|нужна|нужны|хочу)\s+", "", message, flags=re.IGNORECASE)
-        cleaned = re.sub(r"^(?:мне\s+)?(?:файл|документ|папку|каталог|скриншот|фото)\s+", "", cleaned, flags=re.IGNORECASE)
-        return cleaned.strip()
+    def _extract_explicit_path(self, message: str, kind: Optional[str] = None) -> Optional[str]:
+        preferred_kind = kind.lower() if isinstance(kind, str) else None
+        tokens = self._tokenize(message)
+        keyword_set = set(FILE_REFERENCE_TOKENS) | {
+            alias for alias, mapped in FILE_KIND_ALIASES.items() if mapped
+        }
+        for index, token in enumerate(tokens):
+            cleaned = self._clean_token(token)
+            if not cleaned:
+                continue
+            normalized = cleaned.lower()
+            if normalized not in keyword_set:
+                continue
+            next_index = index + 1
+            while next_index < len(tokens):
+                candidate = self._clean_token(tokens[next_index])
+                if not candidate:
+                    next_index += 1
+                    continue
+                lowered = candidate.lower()
+                if lowered in keyword_set:
+                    next_index += 1
+                    continue
+                if self._looks_like_path(candidate):
+                    return candidate
+                if preferred_kind and not Path(candidate).suffix:
+                    return candidate
+                next_index += 1
+        for token in tokens:
+            candidate = self._clean_token(token)
+            if candidate and self._looks_like_path(candidate):
+                return candidate
+        return None
 
-    def _should_search_web(self, normalized: str) -> bool:
-        return any(marker in normalized for marker in self.WEB_HINTS)
+    @staticmethod
+    def _tokenize(message: str) -> List[str]:
+        pattern = r'"[^"]*"|«[^»]+»|\'[^\']*\'|\S+'
+        return [match.group(0) for match in re.finditer(pattern, message)]
+
+    def _clean_token(self, token: str) -> str:
+        stripped = token.strip().strip(",.;:")
+        return self._strip_quotes(stripped)
 
     def _should_search_local(self, normalized: str) -> bool:
         return any(verb in normalized for verb in self.SEARCH_VERBS)
@@ -551,6 +599,7 @@ class IntentRouter:
         "create_file": "создание",
         "write_file": "запись",
         "append_file": "добавление",
+        "edit_file": "редактирование",
         "open_file": "открытие",
         "list_directory": "просмотр",
     }
@@ -702,6 +751,19 @@ class IntentRouter:
             return None
         return index
 
+    def _resolve_file_kind(self, path: str, kind: Optional[str]) -> str:
+        ext = Path(str(path)).suffix.lower()
+        if ext in KIND_BY_EXTENSION:
+            return KIND_BY_EXTENSION[ext]
+        if isinstance(kind, str):
+            key = kind.lower()
+            if key in FILE_KIND_EXT:
+                return key
+            mapped = FILE_KIND_ALIASES.get(key)
+            if mapped:
+                return mapped
+        return DEFAULT_KIND
+
     def _handle_search_file(self, params: Dict[str, Any], session_state: SessionState) -> Dict[str, Any]:
         query_raw = params.get("query")
         query = str(query_raw).strip() if isinstance(query_raw, str) else ""
@@ -805,6 +867,7 @@ class IntentRouter:
             "create_file",
             "write_file",
             "append_file",
+            "edit_file",
             "move_path",
             "copy_path",
             "delete_path",
@@ -827,7 +890,7 @@ class IntentRouter:
         confirmed: bool,
     ) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
         prepared = dict(params)
-        if intent in {"create_file", "write_file", "append_file", "open_file", "list_directory", "move_path", "copy_path", "delete_path"}:
+        if intent in {"create_file", "write_file", "append_file", "edit_file", "open_file", "list_directory", "move_path", "copy_path", "delete_path"}:
             path_value = prepared.get("path")
             if isinstance(path_value, str) and path_value.endswith(":") and len(path_value) > 2:
                 path_value = path_value.rstrip(":")
@@ -855,7 +918,7 @@ class IntentRouter:
                 prepared["destination"] = destination
             if destination:
                 prepared["dst"] = str(self.file_manager.normalize(destination))
-        if intent in {"create_file", "write_file", "append_file", "open_file", "list_directory", "search_local"}:
+        if intent in {"create_file", "write_file", "append_file", "edit_file", "open_file", "list_directory", "search_local"}:
             prepared["whitelist"] = list(self.whitelist)
         if intent == "search_local":
             prepared.setdefault("max_results", 10)
@@ -878,6 +941,7 @@ class IntentRouter:
                 info = self.file_manager.create_file(
                     path_value,
                     content=str(params.get("content", "")),
+                    kind=params.get("kind"),
                     confirmed=confirmed,
                 )
             elif intent == "write_file":
@@ -896,6 +960,48 @@ class IntentRouter:
                     str(params.get("content", "")),
                     confirmed=confirmed,
                 )
+            elif intent == "edit_file":
+                if not path_value:
+                    raise ValueError("Не указан путь для редактирования файла")
+                file_kind = self._resolve_file_kind(str(path_value), params.get("kind"))
+                content_value = str(params.get("content", ""))
+                if file_kind == "docx":
+                    info = self.file_manager.edit_word(
+                        path_value,
+                        content_value,
+                        confirmed=confirmed,
+                    )
+                elif file_kind == "xlsx":
+                    cell_ref = str(params.get("cell") or "A1")
+                    info = self.file_manager.edit_excel(
+                        path_value,
+                        cell_ref,
+                        content_value,
+                        confirmed=confirmed,
+                    )
+                elif file_kind == "pptx":
+                    info = self.file_manager.edit_pptx(
+                        path_value,
+                        content_value,
+                        confirmed=confirmed,
+                    )
+                else:
+                    target_path = str(path_value)
+                    if not Path(target_path).suffix:
+                        target_path = str(Path(target_path).with_suffix(FILE_KIND_EXT[DEFAULT_KIND]))
+                    if params.get("mode") == "write":
+                        info = self.file_manager.write_text(
+                            target_path,
+                            content_value,
+                            confirmed=confirmed,
+                        )
+                    else:
+                        info = self.file_manager.append_text(
+                            target_path,
+                            content_value,
+                            confirmed=confirmed,
+                        )
+                    path_value = target_path
             elif intent == "list_directory":
                 info = self.file_manager.list_directory(path_value, confirmed=confirmed)
             elif intent == "copy_path":
@@ -935,7 +1041,7 @@ class IntentRouter:
         extras: List[str] = []
         if "exists" in info:
             extras.append(f"exists={info['exists']}")
-        if intent in {"create_file", "write_file", "append_file"} and "size" in info:
+        if intent in {"create_file", "write_file", "append_file", "edit_file"} and "size" in info:
             extras.append(f"size={info['size']}")
 
         if intent == "list_directory":
@@ -951,6 +1057,7 @@ class IntentRouter:
             "create_file": "Создан файл",
             "write_file": "Записан файл",
             "append_file": "Дополнен файл",
+            "edit_file": "Файл обновлён",
             "copy_path": "Скопировано",
             "move_path": "Перемещено",
             "delete_path": "Удалено",

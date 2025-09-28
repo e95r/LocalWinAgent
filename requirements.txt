@@ -7,7 +7,6 @@ pyyaml==6.0.1
 rich==13.9.3
 prompt_toolkit==3.0.47
 rapidfuzz==3.5.2
-python-docx==0.8.11
 
 # Автоматизация браузера
 playwright==1.45.0
@@ -21,3 +20,8 @@ pytest==8.2.2
 # Совместимые версии pydantic + core (фикс твоей ошибки)
 pydantic==2.7.4
 pydantic-core==2.18.4
+
+# Пакеты для работы с документами
+python-docx==1.1.2
+openpyxl==3.1.5
+python-pptx==1.0.2
