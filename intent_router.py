@@ -14,7 +14,7 @@ from config import load_config
 from core.task_executor import compile_and_run
 from core.task_schema import TaskRequest, TaskResult
 from tools import apps as apps_module
-from tools.apps import get_aliases
+from tools.apps import get_aliases, IndexedEntry
 
 try:  # pragma: no cover - rapidfuzz может отсутствовать
     from rapidfuzz import fuzz  # type: ignore
@@ -387,10 +387,6 @@ class IntentInferencer:
         normalized = message.lower().strip()
         message_core = message.strip().rstrip(" ?!.")
         file_hint = any(re.search(rf"\b{re.escape(word)}\b", normalized) for word in self.FILE_HINTS)
-
-        generate_data = self._parse_generate_text_command(message)
-        if generate_data:
-            return generate_data
 
         create_data = self._parse_create_command(message)
         if create_data:
@@ -765,6 +761,7 @@ class IntentRouter:
         self.whitelist: List[str] = [str(item) for item in whitelist]
         self.file_manager = FileManager(self.whitelist)
         self.intent_inferencer = IntentInferencer(get_aliases())
+        self.apps = apps_module
         self.APP_KEYWORDS: Dict[str, tuple[str, ...]] = self._build_app_keywords()
         self.llm = OllamaClient()
         self.browser_ids: tuple[str, ...] = ("chrome", "edge", "firefox")
@@ -998,7 +995,6 @@ class IntentRouter:
             return self._make_response(message, ok=True, data={"result": result})
         return self._make_response(message, ok=False, data={"result": result})
 
-    def _handle_generate_write_file(
         self,
         params: Dict[str, Any],
         session: AgentSession,
@@ -1116,6 +1112,12 @@ class IntentRouter:
 
         if intent == "close_app":
             return self._handle_close_app(params, session_state)
+
+        if intent == "refresh_apps":
+            return self._handle_refresh_apps()
+
+        if intent == "open_app":
+            return self._handle_open_app(params, session_state)
 
         if intent == "search_file":
             return self._handle_search_file(params, session_state)
