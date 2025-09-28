@@ -56,13 +56,13 @@ def test_dialog_context(dialog_router: IntentRouter, monkeypatch: pytest.MonkeyP
     ]
     expected_paths = [str(Path(path).expanduser().resolve(strict=False)) for path in fake_results]
 
-    monkeypatch.setattr("intent_router.search_files", lambda query: fake_results)
+    monkeypatch.setattr("intent_router.search_local", lambda *args, **kwargs: expected_paths)
 
     opened: List[str] = []
 
     def fake_open(path: str) -> dict:
         opened.append(path)
-        return {"ok": True, "path": path}
+        return {"ok": True, "path": path, "reply": f"Открыто: {path}"}
 
     monkeypatch.setattr("intent_router.open_path", fake_open)
 
@@ -70,7 +70,7 @@ def test_dialog_context(dialog_router: IntentRouter, monkeypatch: pytest.MonkeyP
     assert search_response["ok"] is True
     assert search_response.get("items") == expected_paths
     assert "1)" in search_response["reply"]
-    assert state.get_results() == expected_paths
+    assert state.get_results(kind="file") == expected_paths
 
     open_second = router.handle_message("открой 2", session, state)
     assert open_second["ok"] is True

@@ -1,9 +1,14 @@
 """Автоматизация браузера через Playwright."""
 from __future__ import annotations
 
+import html
 import logging
+import webbrowser
 from contextlib import contextmanager
-from typing import Optional
+from html.parser import HTMLParser
+from typing import List, Optional, Tuple
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
+from urllib.request import Request, urlopen
 
 try:  # pragma: no cover - импорт Playwright может отсутствовать в тестовой среде
     from playwright.sync_api import TimeoutError, sync_playwright
@@ -17,6 +22,83 @@ except ModuleNotFoundError:  # pragma: no cover
     PLAYWRIGHT_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+
+class _DuckDuckGoParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.results: List[Tuple[str, str]] = []
+        self._capture = False
+        self._current_url = ""
+        self._current_title: List[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:  # type: ignore[override]
+        if tag != "a":
+            return
+        attributes = {key: value or "" for key, value in attrs}
+        css = attributes.get("class", "")
+        if "result__a" in css:
+            self._capture = True
+            self._current_url = attributes.get("href", "")
+            self._current_title = []
+
+    def handle_endtag(self, tag: str) -> None:  # type: ignore[override]
+        if tag != "a" or not self._capture:
+            return
+        title = html.unescape(" ".join(part for part in self._current_title if part).strip())
+        url = self._normalize_url(self._current_url.strip())
+        if title and url:
+            self.results.append((title, url))
+        self._capture = False
+        self._current_url = ""
+        self._current_title = []
+
+    def handle_data(self, data: str) -> None:  # type: ignore[override]
+        if self._capture:
+            self._current_title.append(data.strip())
+
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        if not url:
+            return ""
+        parsed = urlparse(url)
+        if parsed.netloc.endswith("duckduckgo.com") and parsed.path.startswith("/l/"):
+            params = parse_qs(parsed.query)
+            target = params.get("uddg")
+            if target:
+                return unquote(target[0])
+        return url
+
+
+def search_web(query: str, max_results: int = 5) -> List[Tuple[str, str]]:
+    """Простой веб-поиск по DuckDuckGo HTML."""
+
+    query = query.strip()
+    if not query:
+        return []
+
+    params = urlencode({"q": query, "ia": "web"})
+    url = f"https://duckduckgo.com/html/?{params}"
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(request, timeout=10) as response:  # noqa: S310 - управляемый запрос
+        content = response.read().decode("utf-8", errors="ignore")
+
+    parser = _DuckDuckGoParser()
+    parser.feed(content)
+    return parser.results[:max_results]
+
+
+def open_site(url: str) -> str:
+    """Открыть ссылку в системном браузере и вернуть нормализованный URL."""
+
+    normalized = url.strip()
+    if not normalized:
+        raise ValueError("Пустой URL")
+    parsed = urlparse(normalized)
+    if not parsed.scheme:
+        normalized = "https://" + normalized.lstrip("/")
+    webbrowser.open(normalized, new=2)
+    return normalized
 
 
 @contextmanager
