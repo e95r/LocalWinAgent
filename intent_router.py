@@ -7,6 +7,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from config import load_config
@@ -232,6 +233,45 @@ class IntentInferencer:
     URL_RE = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
     CONTENT_RE = re.compile(r"(?:с\s+текстом|контент|текст(?:ом)?)\s+(?P<value>.+)", re.IGNORECASE)
 
+    TYPE_KEYWORDS: Dict[str, str] = {
+        "документ word": ".docx",
+        "word": ".docx",
+        "ворд": ".docx",
+        "файл word": ".docx",
+        "текстовый файл": ".txt",
+        "текстовый документ": ".txt",
+        "текстовая заметка": ".txt",
+        "текстовая": ".txt",
+        "текст": ".txt",
+        "markdown": ".md",
+        "маркдаун": ".md",
+        "разметка markdown": ".md",
+        "md": ".md",
+    }
+
+    NAME_STOPWORDS = {
+        "под",
+        "названием",
+        "название",
+        "назови",
+        "файл",
+        "файлик",
+        "файла",
+        "документ",
+        "документы",
+        "документа",
+        "пожалуйста",
+        "мне",
+        "новый",
+        "новую",
+        "новое",
+        "новая",
+        "пустой",
+        "пустую",
+        "пустое",
+        "пустая",
+    }
+
     FILE_HINTS = {
         "файл",
         "файлик",
@@ -292,11 +332,9 @@ class IntentInferencer:
         message_core = message.strip().rstrip(" ?!.")
         file_hint = any(re.search(rf"\b{re.escape(word)}\b", normalized) for word in self.FILE_HINTS)
 
-        match = self.CREATE_RE.search(message_core)
-        if match:
-            path = match.group("path")
-            content = self._extract_content(message_core)
-            return {"intent": "create_file", "path": path, "content": content}
+        create_data = self._parse_create_command(message)
+        if create_data:
+            return create_data
 
         match = self.WRITE_RE.search(message_core)
         if match:
@@ -364,12 +402,112 @@ class IntentInferencer:
         return best_key
 
     def _extract_content(self, message: str) -> str:
-        match = self.CONTENT_RE.search(message)
-        if match:
-            return match.group("value").strip()
-        if ":" in message:
-            return message.split(":", 1)[1].strip()
+        patterns = (
+            r'с\s+текстом\s+(?P<value>"[^"]*"|«.+?»|\'[^\']*\')',
+            r'со\s+содержимым\s+(?P<value>"[^"]*"|«.+?»|\'[^\']*\')',
+            r'с\s+содержанием\s+(?P<value>"[^"]*"|«.+?»|\'[^\']*\')',
+            r'контент(?:ом)?\s+(?P<value>"[^"]*"|«.+?»|\'[^\']*\')',
+            r'текст(?:ом)?\s+(?P<value>"[^"]*"|«.+?»|\'[^\']*\')',
+            r"с\s+текстом\s+(?P<value>.+)",
+            r"контент(?:ом)?\s+(?P<value>.+)",
+            r"текст(?:ом)?\s+(?P<value>.+)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                return self._strip_quotes(match.group("value").strip())
+        colon_split = re.split(r":\s+", message, maxsplit=1)
+        if len(colon_split) == 2:
+            return self._strip_quotes(colon_split[1].strip())
         return ""
+
+    @staticmethod
+    def _strip_quotes(value: str) -> str:
+        trimmed = value.strip()
+        if len(trimmed) >= 2 and trimmed[0] in {'"', "'", "«"}:
+            closing = {'"': '"', "'": "'", "«": "»"}.get(trimmed[0], trimmed[0])
+            if trimmed.endswith(closing):
+                return trimmed[1:-1]
+        if trimmed.endswith("»") and trimmed.startswith("«"):
+            return trimmed[1:-1]
+        return trimmed
+
+    def _parse_create_command(self, message: str) -> Optional[Dict[str, Any]]:
+        message_core = message.strip().rstrip(" ?!.")
+        content = self._extract_content(message)
+
+        direct = self.CREATE_RE.search(message_core)
+        if direct:
+            raw_path = direct.group("path").strip()
+            if self._looks_like_path(raw_path):
+                extension = self._detect_extension_hint(message_core)
+                normalized_path = self._apply_extension(raw_path, extension)
+                return {"intent": "create_file", "path": normalized_path, "content": content}
+
+        match = re.search(r"создай(?:те)?\s+(?P<body>.+)", message_core, re.IGNORECASE)
+        if not match:
+            return None
+        body = match.group("body").strip()
+        base = self._strip_content_markers(body)
+        extension, remainder = self._remove_type_keyword(base)
+        name = self._extract_name_candidate(remainder)
+        if not name:
+            return None
+        normalized_path = self._apply_extension(name, extension or self._detect_extension_hint(message_core))
+        if not normalized_path:
+            return None
+        return {"intent": "create_file", "path": normalized_path, "content": content}
+
+    def _strip_content_markers(self, text: str) -> str:
+        lowered = text.lower()
+        for marker in (" с текстом", " со содержим", " с содержим", " с контент", " с описанием"):
+            idx = lowered.find(marker)
+            if idx != -1:
+                return text[:idx].strip()
+        parts = re.split(r":\s+", text, maxsplit=1)
+        remainder = parts[0] if len(parts) == 2 else text
+        return remainder.strip()
+
+    def _remove_type_keyword(self, text: str) -> tuple[Optional[str], str]:
+        lowered = text.lower()
+        for keyword in sorted(self.TYPE_KEYWORDS, key=len, reverse=True):
+            pattern = re.compile(rf"\b{re.escape(keyword)}\b", re.IGNORECASE)
+            if pattern.search(lowered):
+                cleaned = pattern.sub(" ", text, count=1)
+                return self.TYPE_KEYWORDS[keyword], cleaned
+        return None, text
+
+    def _extract_name_candidate(self, text: str) -> str:
+        quoted = re.search(r'["\'«»](.+?)["\'«»]', text)
+        if quoted:
+            return quoted.group(1).strip()
+        cleaned = re.sub(r'["\'«»]', ' ', text)
+        cleaned = re.sub(r"под\s+названием", " ", cleaned, flags=re.IGNORECASE)
+        tokens = [token for token in re.split(r"\s+", cleaned) if token]
+        filtered = [token for token in tokens if token.lower() not in self.NAME_STOPWORDS]
+        return " ".join(filtered).strip()
+
+    def _detect_extension_hint(self, text: str) -> Optional[str]:
+        lowered = text.lower()
+        for keyword in sorted(self.TYPE_KEYWORDS, key=len, reverse=True):
+            pattern = re.compile(rf"\b{re.escape(keyword)}\b", re.IGNORECASE)
+            if pattern.search(lowered):
+                return self.TYPE_KEYWORDS[keyword]
+        return None
+
+    def _apply_extension(self, path: str, extension: Optional[str]) -> str:
+        normalized = self._strip_quotes(path).strip()
+        if not normalized:
+            return normalized
+        try:
+            suffix = Path(normalized).suffix
+        except Exception:  # pragma: no cover - Path может не справиться с экзотикой
+            suffix = ""
+        if suffix:
+            return normalized
+        if extension:
+            return normalized + extension
+        return normalized
 
     def _clean_query(self, message: str) -> str:
         cleaned = re.sub(r"^(?:найди|найти|покажи|посмотри|посмотреть|ищи|мне\s+нужен|мне\s+нужна|нужен|нужна|нужны|хочу)\s+", "", message, flags=re.IGNORECASE)
