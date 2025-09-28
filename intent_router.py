@@ -26,6 +26,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
     fuzz = _FallbackFuzz()  # type: ignore
 from tools.files import FileManager, get_desktop_path
+from tools import search as search_tools
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +221,8 @@ class IntentInferencer:
     APPEND_RE = re.compile(r"(?:добавь|допиши)\s+(?:к|в)\s+(?P<path>[\w./\\:-]+)", re.IGNORECASE)
     LIST_RE = re.compile(r"(?:покажи|показать|список|открой)\s+(?:каталог|директорию|папк[ауи])\s*(?P<path>.+)?", re.IGNORECASE)
     OPEN_FILE_RE = re.compile(r"открой\s+(?:файл|документ|папк[ауи])\s+(?P<path>[\w./\\:-]+)", re.IGNORECASE)
+    SEARCH_FILE_RE = re.compile(r"(?:найди|найти|поищи|ищи)\s+(?P<query>.+)", re.IGNORECASE)
+    OPEN_GENERIC_RE = re.compile(r"(?:открой|покажи|запусти)\s+(?P<target>.+)", re.IGNORECASE)
     URL_RE = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
     CONTENT_RE = re.compile(r"(?:с\s+текстом|контент|текст(?:ом)?)\s+(?P<value>.+)", re.IGNORECASE)
 
@@ -285,7 +288,7 @@ class IntentInferencer:
         if app:
             return {"intent": "open_app", "name": app}
 
-        file_hint = any(word in normalized for word in self.FILE_HINTS)
+        file_hint = any(re.search(rf"\b{re.escape(word)}\b", normalized) for word in self.FILE_HINTS)
 
         match = self.CREATE_RE.search(message_core)
         if match:
@@ -313,6 +316,17 @@ class IntentInferencer:
         match = self.OPEN_FILE_RE.search(message_core)
         if match:
             return {"intent": "open_file", "path": match.group("path")}
+
+        search_match = self.SEARCH_FILE_RE.search(message_core)
+        if search_match and (file_hint or self._looks_like_path(search_match.group("query"))):
+            query = search_match.group("query").strip()
+            return {"intent": "search_file", "query": query}
+
+        open_match = self.OPEN_GENERIC_RE.search(message_core)
+        if open_match:
+            target = open_match.group("target").strip()
+            if self._looks_like_file_reference(target):
+                return {"intent": "open_file", "query": target}
 
         url_match = self.URL_RE.search(message_core)
         if url_match:
@@ -359,6 +373,20 @@ class IntentInferencer:
 
     def _should_search_local(self, normalized: str) -> bool:
         return any(verb in normalized for verb in self.SEARCH_VERBS)
+
+    def _looks_like_path(self, text: str) -> bool:
+        lowered = text.lower()
+        if any(symbol in lowered for symbol in ("\\", "/", ":")):
+            return True
+        return bool(re.search(r"\.[\w]{1,6}(?:\s|$)", lowered))
+
+    def _looks_like_file_reference(self, text: str) -> bool:
+        lowered = text.lower()
+        if lowered.isdigit() or lowered in {"его", "ее", "её", "их"}:
+            return True
+        if any(lowered.startswith(prefix) for prefix in ("перв", "втор", "трет", "послед")):
+            return True
+        return self._looks_like_path(text)
 
 
 class IntentRouter:
@@ -509,6 +537,77 @@ class IntentRouter:
             return None
         return index
 
+    def _handle_search_file(self, params: Dict[str, Any], session_state: SessionState) -> Dict[str, Any]:
+        query_raw = params.get("query")
+        query = str(query_raw).strip() if isinstance(query_raw, str) else ""
+        if not query:
+            session_state.clear_results()
+            return self._make_response("Не указан запрос для поиска.", ok=False, items=[])
+
+        search_callable = getattr(search_tools, "search_files", None)
+        if not callable(search_callable):  # pragma: no cover - fallback для старых версий
+            search_callable = getattr(search_tools, "search_local")
+
+        max_results = params.get("max_results")
+        kwargs: Dict[str, Any] = {"whitelist": list(self.whitelist)}
+        if isinstance(max_results, int) and max_results > 0:
+            kwargs["max_results"] = max_results
+        try:
+            results = search_callable(query, **kwargs)
+        except TypeError:  # pragma: no cover - совместимость сигнатур
+            results = search_callable(query)
+
+        normalized = [str(item) for item in results if item]
+        if not normalized:
+            session_state.clear_results()
+            return self._make_response("Ничего не найдено.", ok=False, items=[])
+
+        session_state.set_results(normalized, "file")
+        lines = [f"{idx + 1}) {entry}" for idx, entry in enumerate(normalized[:10])]
+        display = "\n".join(lines)
+        reply = f"Нашёл файлы:\n{display}"
+        return self._make_response(reply, ok=True, items=list(normalized))
+
+    def _handle_open_file(self, params: Dict[str, Any], session_state: SessionState) -> Dict[str, Any]:
+        raw_path = params.get("path") or params.get("query")
+        if raw_path is None:
+            return self._make_response("Не указан путь для открытия.", ok=False)
+
+        token = str(raw_path).strip()
+        if not token:
+            return self._make_response("Не указан путь для открытия.", ok=False)
+
+        lowered = token.lower()
+        use_context = False
+        if lowered.isdigit() or lowered in {"его", "ее", "её", "их"}:
+            use_context = True
+        elif any(lowered.startswith(prefix) for prefix in ("перв", "втор", "трет", "послед")):
+            use_context = True
+
+        target_path = token
+        if use_context:
+            candidates = session_state.get_results(kind="file")
+            if not candidates:
+                return self._make_response("Нет сохранённых результатов для открытия.", ok=False)
+            index = self._resolve_context_index(token, len(candidates))
+            if index is None:
+                total = len(candidates)
+                return self._make_response(
+                    f"Выберите число от 1 до {total} или используйте 'первый/последний'.",
+                    ok=False,
+                )
+            target_path = candidates[index]
+            session_state.last_updated = time.time()
+
+        info = self.file_manager.open_path(str(target_path))
+        opened_path = str(info.get("path") or target_path)
+
+        if info.get("ok"):
+            return self._make_response(f"Открыл: {opened_path}", ok=True, data={"result": info})
+
+        error_message = info.get("error") or "Неизвестная ошибка"
+        return self._make_response(f"Не удалось открыть: {error_message}", ok=False, data={"result": info})
+
     def _run_intent(
         self,
         intent: str,
@@ -517,6 +616,12 @@ class IntentRouter:
         session_state: SessionState,
         confirmed: bool,
     ) -> Dict[str, Any]:
+        if intent == "search_file":
+            return self._handle_search_file(params, session_state)
+
+        if intent == "open_file":
+            return self._handle_open_file(params, session_state)
+
         prepared, confirmation_response = self._prepare_params(intent, params, session, confirmed)
         if confirmation_response is not None:
             return confirmation_response

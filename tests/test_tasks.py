@@ -151,8 +151,7 @@ def test_context_open_last_result(router_env: Tuple[IntentRouter, Path], monkeyp
 
     assert response["ok"] is True
     resolved = [str(Path(path).resolve(strict=False)) for path in opened]
-    expected = [str(Path(absolute).resolve(strict=False))] * 2
-    assert resolved == expected
+    assert resolved == [str(Path(absolute).resolve(strict=False))]
 
 
 def test_requires_confirmation(router_env: Tuple[IntentRouter, Path], tmp_path: Path) -> None:

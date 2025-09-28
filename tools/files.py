@@ -86,38 +86,35 @@ def _resolve_shortcut(path: Path) -> Path:
 
 
 def open_path(path: str) -> dict:
-    target = normalize_path(path)
+    expanded = os.path.expandvars(str(path))
+    expanded = os.path.expanduser(expanded)
+    target = Path(expanded).resolve(strict=False)
+
     if not target.exists():
-        reply = f"Путь не найден: {target}"
         return {
             "ok": False,
-            "path": str(target.resolve(strict=False)),
+            "path": str(target),
             "exists": False,
-            "reply": reply,
             "error": "Путь не существует",
         }
 
     actual = _resolve_shortcut(target)
+    resolved = actual.resolve(strict=False)
+
     try:
-        if platform.system() == "Windows":
+        if hasattr(os, "startfile"):
             os.startfile(str(actual))  # type: ignore[attr-defined]
         else:  # pragma: no cover - не Windows
-            process = open_with_shell(str(actual))
-            if process is None:
-                raise RuntimeError("Не удалось открыть путь через оболочку")
+            open_with_shell(str(actual))
     except Exception as exc:  # pragma: no cover - системные ошибки Windows
-        reply = f"Не удалось открыть: {actual}"
         return {
             "ok": False,
-            "path": str(actual.resolve(strict=False)),
-            "exists": actual.exists(),
-            "reply": reply,
+            "path": str(resolved),
+            "exists": resolved.exists(),
             "error": str(exc),
         }
 
-    resolved = actual.resolve(strict=False)
-    reply = f"Открыто: {resolved}"
-    return {"ok": True, "path": str(resolved), "exists": True, "reply": reply}
+    return {"ok": True, "path": str(resolved), "exists": True}
 
 
 class ConfirmationRequiredError(PermissionError):

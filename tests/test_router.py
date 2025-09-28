@@ -43,10 +43,26 @@ def router_with_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Dict[str
 
         monkeypatch.setattr(apps_module, "open_with_shell", lambda p: p)
         monkeypatch.setattr(files_module, "open_with_shell", lambda p: p)
-        monkeypatch.setattr("tools.files.open_path", lambda path: {"ok": True, "reply": f"Открыто: {path}"})
+
+        def fake_open(path: str) -> dict:
+            return {
+                "ok": True,
+                "path": str(Path(path).resolve(strict=False)),
+                "reply": f"Открыто: {path}",
+            }
+
+        monkeypatch.setattr("tools.files.open_path", fake_open)
     else:
         monkeypatch.setattr(os, "startfile", lambda p: p, raising=False)
-        monkeypatch.setattr("tools.files.open_path", lambda path: {"ok": True, "reply": f"Открыто: {path}"})
+
+        def fake_open_win(path: str) -> dict:
+            return {
+                "ok": True,
+                "path": str(Path(path).resolve(strict=False)),
+                "reply": f"Открыто: {path}",
+            }
+
+        monkeypatch.setattr("tools.files.open_path", fake_open_win)
 
     return {"router": router, "allow_dir": allow_dir, "monkeypatch": monkeypatch}
 
@@ -71,7 +87,7 @@ def test_full_file_flow(router_with_tmp: Dict[str, object]) -> None:
     assert full_path.read_text(encoding="utf-8") == "приветещё"
 
     response_open = router.handle_message("открой файл test.txt", session, state)
-    assert response_open["reply"].startswith("Открыто: ")
+    assert response_open["reply"].startswith("Открыл: ")
     assert str(full_path.resolve()) in response_open["reply"]
 
     response_list = router.handle_message("покажи каталог .", session, state)
