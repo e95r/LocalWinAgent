@@ -35,7 +35,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from config import load_config
 from tools.apps import ApplicationManager
-from tools.files import ConfirmationRequiredError, FileManager
+from tools.files import ConfirmationRequiredError, FileManager, get_desktop_path
 from tools.search import EverythingNotInstalledError, search_files
 from tools.web import WebAutomation
 
@@ -406,6 +406,30 @@ class IntentRouter:
         message = message.strip()
         if not message:
             return {"reply": "Пустой запрос", "requires_confirmation": False}
+
+        normalized_lower = message.lower().strip()
+        normalized_lower = normalized_lower.rstrip(" ?")
+
+        if normalized_lower == "напиши путь до рабочего стола":
+            desktop_path = get_desktop_path().resolve(strict=False)
+            return {
+                "reply": f"Рабочий стол: {desktop_path}",
+                "requires_confirmation": False,
+            }
+
+        if normalized_lower == "какие файлы есть на рабочем столе":
+            desktop_path = get_desktop_path().resolve(strict=False)
+            try:
+                data = self.file_manager.list_directory(str(desktop_path), confirmed=True)
+            except FileNotFoundError:
+                reply = f"Рабочий стол не найден: {desktop_path}"
+            except Exception as exc:  # pragma: no cover - защита от неожиданных ошибок
+                logger.exception("Ошибка при получении списка рабочего стола: %s", exc)
+                reply = f"Ошибка: {exc}"
+            else:
+                items = ", ".join(data.get("items", [])) or "(пусто)"
+                reply = f"Рабочий стол ({desktop_path}): {items}"
+            return {"reply": reply, "requires_confirmation": False}
 
         file_result = self._handle_file_commands(message, session)
         if file_result is not None:

@@ -9,9 +9,91 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
 
+import config
 from tools.apps import open_with_shell
 
 logger = logging.getLogger(__name__)
+
+def get_desktop_path() -> Path:
+    """Вернуть путь к рабочему столу пользователя."""
+
+    desktop = config._KNOWN.get("DESKTOP")  # pylint: disable=protected-access
+    if desktop:
+        return Path(desktop).resolve(strict=False)
+    home = Path.home()
+    return (home / "Desktop").resolve(strict=False)
+
+
+def _is_hidden_or_system(path: Path) -> bool:
+    """Проверить, является ли путь скрытым или системным."""
+
+    name = path.name
+    if not name:
+        return False
+    if name.lower() == "desktop.ini":
+        return True
+    if name.startswith("."):
+        return True
+
+    if platform.system() != "Windows":
+        return False
+
+    try:
+        get_attrs = getattr(os, "getfileattributes", None)
+        if get_attrs is not None:  # pragma: no cover - редкое использование
+            attributes = get_attrs(str(path))
+        else:
+            import ctypes  # noqa: PLC0415
+
+            attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))  # type: ignore[attr-defined]
+            if attrs == -1:
+                return False
+            attributes = attrs
+        return bool(attributes & 0x2) or bool(attributes & 0x4)
+    except Exception:  # pragma: no cover - системные ошибки не критичны
+        return False
+
+
+def _resolve_shortcut(target: Path) -> Path:
+    """Разрешить путь ярлыка Windows."""
+
+    if platform.system() != "Windows" or target.suffix.lower() != ".lnk":
+        return target
+    try:
+        import win32com.client  # type: ignore
+    except ModuleNotFoundError:  # pragma: no cover - win32com может отсутствовать
+        logger.warning("Не удалось импортировать win32com для обработки ярлыка %s", target)
+        return target
+    shell = win32com.client.Dispatch("WScript.Shell")  # type: ignore[attr-defined]
+    shortcut = shell.CreateShortCut(str(target))
+    resolved = Path(shortcut.Targetpath)
+    return resolved.resolve(strict=False)
+
+
+def open_path(path: str | os.PathLike[str]) -> dict:
+    """Открыть файл или каталог и вернуть информацию о результате."""
+
+    target = Path(path).expanduser()
+    target = target.resolve(strict=False)
+    if not target.exists():
+        return {"ok": False, "path": str(target), "error": "Путь не найден"}
+
+    to_open = target
+    if to_open.suffix.lower() == ".lnk":
+        to_open = _resolve_shortcut(to_open)
+
+    system = platform.system()
+    if system == "Windows" and hasattr(os, "startfile"):
+        try:
+            os.startfile(str(to_open))  # type: ignore[attr-defined]
+        except Exception as exc:  # pragma: no cover - системные ошибки
+            return {"ok": False, "path": str(to_open), "error": str(exc)}
+        return {"ok": True, "path": str(to_open.resolve(strict=False))}
+
+    opened = open_with_shell(str(to_open))
+    if opened is None:
+        return {"ok": False, "path": str(to_open), "error": "Не удалось открыть путь"}
+    return {"ok": True, "path": str(to_open.resolve(strict=False))}
 
 
 class ConfirmationRequiredError(PermissionError):
@@ -163,45 +245,26 @@ class FileManager:
             raise FileExistsError(f"Путь {target} не удалён")
         return {"ok": True, "path": str(target), "exists": False}
 
-    def list_directory(self, path: str, confirmed: bool = False) -> dict:
-        directory = self._normalize(path)
+    def list_directory(self, path: str | None = None, confirmed: bool = False) -> dict:
+        directory = Path.cwd().resolve(strict=False) if path is None else self._normalize(path)
         self.ensure_allowed(directory, "просмотр", confirmed)
         self._operation_log("Список каталога", directory, confirmed)
         if not directory.exists() or not directory.is_dir():
             raise FileNotFoundError(f"Каталог {directory} не существует")
-        items = sorted(item.name for item in directory.iterdir())
+        items = [
+            item.name
+            for item in sorted(directory.iterdir(), key=lambda candidate: candidate.name.lower())
+            if not _is_hidden_or_system(item)
+        ]
         logger.info("Каталог %s содержит %d элементов", directory, len(items))
         return {"ok": True, "path": str(directory), "items": items}
-
-    def _resolve_shortcut(self, target: Path) -> Path:
-        if platform.system() != "Windows" or target.suffix.lower() != ".lnk":
-            return target
-        try:
-            import win32com.client  # type: ignore
-        except ModuleNotFoundError:
-            logger.warning("Не удалось импортировать win32com для обработки ярлыка %s", target)
-            return target
-        shell = win32com.client.Dispatch("WScript.Shell")  # type: ignore[attr-defined]
-        shortcut = shell.CreateShortCut(str(target))
-        resolved = Path(shortcut.Targetpath)
-        return resolved.resolve(strict=False)
 
     def open_path(self, path: str) -> dict:
         target = self._normalize(path)
         self._operation_log("Открытие пути", target, confirmed=True)
-        if not target.exists():
-            logger.error("Путь %s не найден для открытия", target)
-            return {"ok": False, "path": str(target), "error": "Путь не найден"}
-
-        system = platform.system()
-        to_open: Path = self._resolve_shortcut(target)
-        if system == "Windows" and hasattr(os, "startfile"):
-            os.startfile(str(to_open))  # type: ignore[attr-defined]
-            logger.info("Путь открыт через os.startfile: %s", to_open)
+        result = open_path(str(target))
+        if result.get("ok"):
+            logger.info("Путь открыт: %s", result["path"])
         else:
-            opened = open_with_shell(str(to_open))
-            if opened is None:
-                logger.error("Не удалось открыть путь %s на платформе %s", to_open, system)
-                return {"ok": False, "path": str(to_open), "error": "Не удалось открыть путь"}
-            logger.info("Путь открыт через оболочку: %s", to_open)
-        return {"ok": True, "path": str(to_open.resolve(strict=False))}
+            logger.error("Не удалось открыть путь %s: %s", target, result.get("error"))
+        return result
