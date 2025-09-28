@@ -1,0 +1,88 @@
+Новое подключение WebSocket: 2846097168080
+Сообщение от клиента: найди файл 1.docx
+Обнаружен интент: search_file
+Everything CLI не найден: [WinError 2] Не удается найти указанный файл
+Отключение WebSocket 2846097168080
+WebSocket 2846097168080 отключен
+Новое подключение WebSocket: 2565088171728
+Сообщение от клиента: найди файл Doom.rar
+Обнаружен интент: search_file
+Ошибка выполнения Everything CLI: Command '['.\\bin\\es.exe', 'doom.rar', '-max-results=50', '-full-path']' returned non-zero exit status 1.
+Ошибка при обработке интента: Everything вернул ошибку
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\tools\search.py", line 55, in search_files
+    return _call_everything(query, max_results=max_results)
+  File "C:\Users\mixai\Desktop\LocalWinAgent\tools\search.py", line 23, in _call_everything
+    completed = subprocess.run(
+        command,
+    ...<3 lines>...
+        encoding="utf-8",
+    )
+  File "C:\Users\mixai\AppData\Local\Programs\Python\Python313\Lib\subprocess.py", line 577, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['.\\bin\\es.exe', 'doom.rar', '-max-results=50', '-full-path']' returned non-zero exit status 1.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\intent_router.py", line 251, in handle_message
+    results = search_files(intent["query"])
+  File "C:\Users\mixai\Desktop\LocalWinAgent\tools\search.py", line 61, in search_files
+    raise RuntimeError("Everything вернул ошибку") from exc
+RuntimeError: Everything вернул ошибку
+Отключение WebSocket 2565088171728
+WebSocket 2565088171728 отключен
+Новое подключение WebSocket: 2447018317968
+Сообщение от клиента: найди файл Doom.rar
+Обнаружен интент: search_file
+Ошибка выполнения Everything CLI: Command '['.\\bin\\es.exe', 'doom.rar', '-n', '50', '-full-path']' returned non-zero exit status 1.
+Ошибка при обработке интента: Everything вернул ошибку
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\tools\search.py", line 24, in _call_everything
+    completed = subprocess.run(command, check=True, capture_output=True, text=True)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\AppData\Local\Programs\Python\Python311\Lib\subprocess.py", line 569, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['.\\bin\\es.exe', 'doom.rar', '-max-results=50', '-full-path']' returned non-zero exit status 1.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\tools\search.py", line 63, in search_files
+    return _call_everything(query, max_results=max_results)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\tools\search.py", line 28, in _call_everything
+    completed = subprocess.run(command, check=True, capture_output=True, text=True)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\AppData\Local\Programs\Python\Python311\Lib\subprocess.py", line 569, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['.\\bin\\es.exe', 'doom.rar', '-n', '50', '-full-path']' returned non-zero exit status 1.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\intent_router.py", line 251, in handle_message
+    results = search_files(intent["query"])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\tools\search.py", line 69, in search_files
+    raise RuntimeError("Everything вернул ошибку") from exc
+RuntimeError: Everything вернул ошибку
+Сообщение от клиента: найди aida.rar
+Новое подключение WebSocket: 1257682988432
+Сообщение от клиента: найди aida.rar
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: открой файл
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: открой его программой 7zip
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: открой файл кр.docx
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: создай файл на рабочем столе file.docx с содержимым "текст"
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: найди file.docx
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: создай папку на рабочем столе "папка 125"
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: создай в D:\ папку "папка12"
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"

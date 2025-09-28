@@ -10,7 +10,7 @@ from typing import Iterable, List
 
 logger = logging.getLogger(__name__)
 
-EVERYTHING_CLI = "es.exe"
+EVERYTHING_CLI = r".\bin\es.exe"
 
 
 class EverythingNotInstalledError(RuntimeError):
@@ -18,7 +18,15 @@ class EverythingNotInstalledError(RuntimeError):
 
 
 def _call_everything(query: str, max_results: int = 50) -> List[str]:
+    # пробуем с -max-results, если упадёт — используем -n
     command = [EVERYTHING_CLI, query, f"-max-results={max_results}", "-full-path"]
+    try:
+        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError:
+        # fallback на старый синтаксис
+        command = [EVERYTHING_CLI, query, f"-n", str(max_results), "-full-path"]
+        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+
     logger.debug("Выполнение команды: %s", command)
     completed = subprocess.run(
         command,
