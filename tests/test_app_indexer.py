@@ -187,3 +187,47 @@ def test_refresh_apps_intent(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert response.get("ok") is True
     assert "42" in response.get("reply", "")
+import sys
+from types import SimpleNamespace
+from pathlib import Path
+import pytest
+
+from tools.app_indexer import AppIndexer
+
+def test_resolve_lnk_handles_both_TargetPath_casings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    target = tmp_path / "MyApp.exe"
+    target.write_text("run")
+
+    # Вариант 1: TargetPath
+    class ShortcutUpper:
+        TargetPath = str(target)
+        Arguments = "--upper"
+
+    # Вариант 2: Targetpath
+    class ShortcutLower:
+        Targetpath = str(target)
+        Arguments = "--lower"
+
+    class FakeShell:
+        def __init__(self, kind: str):
+            self.kind = kind
+        def CreateShortcut(self, _path: str):
+            return ShortcutUpper() if self.kind == "upper" else ShortcutLower()
+
+    class FakeClientModule:
+        def __init__(self, kind: str):
+            self.kind = kind
+        def Dispatch(self, _name: str) -> FakeShell:
+            return FakeShell(self.kind)
+
+    # Прогоняем оба варианта регистров
+    for kind in ("upper", "lower"):
+        fake_module = SimpleNamespace(client=FakeClientModule(kind))
+        monkeypatch.setitem(sys.modules, "win32com", fake_module)
+        monkeypatch.setitem(sys.modules, "win32com.client", fake_module.client)
+
+        shortcut_path = tmp_path / f"Sample_{kind}.lnk"
+        shortcut_path.write_text("lnk")
+
+        result = AppIndexer.resolve_lnk(shortcut_path)
+        assert result == (str(target), f"--{kind}")

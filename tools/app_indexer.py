@@ -162,7 +162,8 @@ class AppIndexer:
 
             shell = win32com.client.Dispatch("WScript.Shell")  # type: ignore[attr-defined]
             shortcut = shell.CreateShortcut(str(shortcut_path))  # type: ignore[attr-defined]
-            target = getattr(shortcut, "Targetpath", "")
+target = getattr(shortcut, "TargetPath", "") or getattr(shortcut, "Targetpath", "")
+
             arguments = getattr(shortcut, "Arguments", "")
             return str(target or ""), str(arguments or "")
         except Exception as exc:  # pragma: no cover - зависит от окружения
