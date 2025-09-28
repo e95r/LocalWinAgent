@@ -1,4 +1,4 @@
-"""Утилиты работы с файловой системой для LocalWinAgent."""
+"""Инструменты работы с файлами для LocalWinAgent."""
 
 from __future__ import annotations
 
@@ -6,15 +6,67 @@ import logging
 import os
 import platform
 import shutil
-from dataclasses import dataclass, field
+import subprocess
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, Optional
 
 import config
 from tools.apps import open_with_shell
-from tools import docx_writer
+from tools.exceptions import (
+    EverythingNotInstalledError,
+    FileOperationError,
+    NotAllowedPathError,
+)
+
+try:  # pragma: no cover - импорт проверяется в рантайме
+    from docx import Document
+except ImportError as exc:  # pragma: no cover - отсутствие зависимостей
+    raise EverythingNotInstalledError("Требуется установить пакет python-docx") from exc
+
+try:  # pragma: no cover
+    from openpyxl import Workbook, load_workbook
+except ImportError as exc:  # pragma: no cover
+    raise EverythingNotInstalledError("Требуется установить пакет openpyxl") from exc
+
+try:  # pragma: no cover
+    from pptx import Presentation
+    from pptx.util import Inches
+except ImportError as exc:  # pragma: no cover
+    raise EverythingNotInstalledError("Требуется установить пакет python-pptx") from exc
 
 logger = logging.getLogger(__name__)
+
+FILE_KIND_EXT = {
+    "txt": ".txt",
+    "docx": ".docx",
+    "xlsx": ".xlsx",
+    "pptx": ".pptx",
+}
+
+FILE_TYPE_EXT = {
+    "текст": ".txt",
+    "текстовый": ".txt",
+    "txt": ".txt",
+    "text": ".txt",
+    "word": ".docx",
+    "ворд": ".docx",
+    "документ": ".docx",
+    "docx": ".docx",
+    "excel": ".xlsx",
+    "таблица": ".xlsx",
+    "xls": ".xlsx",
+    "xlsx": ".xlsx",
+    "ppt": ".pptx",
+    "pptx": ".pptx",
+    "презентация": ".pptx",
+}
+
+KIND_BY_EXTENSION = {value: key for key, value in FILE_KIND_EXT.items()}
+FILE_KIND_ALIASES = {
+    alias: KIND_BY_EXTENSION.get(ext)
+    for alias, ext in FILE_TYPE_EXT.items()
+    if ext in KIND_BY_EXTENSION
+}
 
 
 def _expand(path: str | os.PathLike[str]) -> Path:
@@ -23,8 +75,10 @@ def _expand(path: str | os.PathLike[str]) -> Path:
     return Path(expanded)
 
 
-def normalize_path(path: str | os.PathLike[str], *, base: str | os.PathLike[str] | None = None) -> Path:
-    """Нормализовать путь: раскрыть переменные и привести к абсолютному виду."""
+def normalize_path(
+    path: str | os.PathLike[str], *, base: str | os.PathLike[str] | None = None
+) -> Path:
+    """Нормализовать путь до абсолютного представления."""
 
     candidate = _expand(path)
     if candidate.is_absolute():
@@ -74,83 +128,63 @@ def is_path_hidden(path: Path) -> bool:
 def _resolve_shortcut(path: Path) -> Path:
     if platform.system() != "Windows" or path.suffix.lower() != ".lnk":
         return path
-    try:
+    try:  # pragma: no cover - зависит от win32com
         import win32com.client  # type: ignore
 
         shell = win32com.client.Dispatch("WScript.Shell")  # type: ignore[attr-defined]
         shortcut = shell.CreateShortCut(str(path))
         target = Path(shortcut.Targetpath)
         return target.resolve(strict=False)
-    except Exception:  # pragma: no cover - зависимости win32com могут отсутствовать
+    except Exception:  # pragma: no cover
         logger.warning("Не удалось разрешить ярлык %s", path)
         return path
 
 
-def open_path(path: str) -> dict:
-    expanded = os.path.expandvars(str(path))
-    expanded = os.path.expanduser(expanded)
-    target = Path(expanded).resolve(strict=False)
-
-    if not target.exists():
-        return {
-            "ok": False,
-            "path": str(target),
-            "exists": False,
-            "error": "Путь не существует",
-            "verified": False,
-        }
-
-    actual = _resolve_shortcut(target)
-    resolved = actual.resolve(strict=False)
-
-    try:
-        if hasattr(os, "startfile"):
-            os.startfile(str(actual))  # type: ignore[attr-defined]
-        else:  # pragma: no cover - не Windows
-            open_with_shell(str(actual))
-    except Exception as exc:  # pragma: no cover - системные ошибки Windows
-        exists = resolved.exists()
-        return {
-            "ok": False,
-            "path": str(resolved),
-            "exists": exists,
-            "error": str(exc),
-            "verified": exists,
-        }
-
-    return {"ok": True, "path": str(resolved), "exists": True, "verified": True}
+def open_path(path: str | os.PathLike[str]) -> dict:
+    manager = FileManager([])
+    return manager.open_path(str(path))
 
 
-class ConfirmationRequiredError(PermissionError):
-    def __init__(self, path: Path, action: str):
-        super().__init__(f"Операция '{action}' требует подтверждения для пути: {path}")
-        self.path = path
-        self.action = action
-
-
-@dataclass(slots=True)
 class FileManager:
-    whitelist: Iterable[str]
-    _allowed_paths: List[Path] = field(init=False, default_factory=list)
-    _default_root: Path = field(init=False)
+    """Класс для безопасной работы с файлами в заданных директориях."""
 
-    def __post_init__(self) -> None:
+    def __init__(self, whitelist: Iterable[str]):
+        self.whitelist = list(whitelist)
         self._allowed_paths = [normalize_path(item) for item in self.whitelist]
-        if self._allowed_paths:
-            self._default_root = self._allowed_paths[0]
-        else:
-            self._default_root = get_desktop_path().resolve(strict=False)
-        logger.debug("Белый список: %s", self._allowed_paths)
-
-    def _normalize(self, path: str | os.PathLike[str]) -> Path:
-        return normalize_path(path, base=self._default_root)
-
-    def normalize(self, path: str | os.PathLike[str]) -> Path:
-        return self._normalize(path)
+        self._default_root = (
+            self._allowed_paths[0] if self._allowed_paths else get_desktop_path()
+        )
+        logger.debug("Белый список директорий: %s", self._allowed_paths)
 
     @property
     def default_root(self) -> Path:
         return self._default_root
+
+    def normalize(self, path: str | os.PathLike[str]) -> Path:
+        return normalize_path(path, base=self._default_root)
+
+    def _normalize_kind(self, kind: Optional[str]) -> Optional[str]:
+        if not kind:
+            return None
+        key = kind.strip().lower()
+        if key in FILE_KIND_EXT:
+            return key
+        if key in FILE_KIND_ALIASES and FILE_KIND_ALIASES[key]:
+            return FILE_KIND_ALIASES[key]
+        return None
+
+    def _resolve_path(self, raw: str, *, kind: Optional[str] = None) -> Path:
+        candidate = _expand(raw)
+        normalized_kind = self._normalize_kind(kind)
+        if normalized_kind:
+            ext = FILE_KIND_EXT[normalized_kind]
+            if not candidate.suffix:
+                candidate = candidate.with_name(candidate.name + ext)
+        if not candidate.is_absolute():
+            candidate = (self._default_root / candidate).resolve(strict=False)
+        else:
+            candidate = candidate.resolve(strict=False)
+        return candidate
 
     def _is_allowed(self, path: Path) -> bool:
         for allowed in self._allowed_paths:
@@ -161,21 +195,70 @@ class FileManager:
                 continue
         return False
 
-    def requires_confirmation(self, path: Path) -> bool:
-        return not self._is_allowed(path)
+    def _make_confirmation(self, path: Path, op_name: str) -> dict:
+        logger.warning("Требуется подтверждение для %s: %s", op_name, path)
+        return {
+            "ok": False,
+            "path": str(path),
+            "requires_confirmation": True,
+            "error": f"Требуется подтверждение для {op_name}",
+        }
 
-    def ensure_allowed(self, path: Path, action: str, confirmed: bool) -> Optional[dict]:
-        if self.requires_confirmation(path) and not confirmed:
-            absolute = path.resolve(strict=False)
-            logger.warning("Требуется подтверждение для %s: %s", action, absolute)
-            return {
-                "ok": False,
-                "path": str(absolute),
-                "requires_confirmation": True,
-                "error": "Требуется подтверждение для операции вне белого списка",
-                "verified": False,
-            }
-        return None
+    def _ensure_allowed(
+        self, path: Path, confirmed: bool, op_name: str
+    ) -> Optional[dict]:
+        if self._is_allowed(path) or confirmed:
+            return None
+        return self._make_confirmation(path, op_name)
+
+    def _inspect(self, path: Path) -> tuple[bool, int]:
+        try:
+            exists = path.exists()
+            size = path.stat().st_size if exists and path.is_file() else 0
+        except OSError:
+            exists = False
+            size = 0
+        return exists, size
+
+    def _finalize(
+        self,
+        path: Path,
+        *,
+        ok: bool,
+        exists: Optional[bool] = None,
+        size: Optional[int] = None,
+        error: Optional[str] = None,
+        requires_confirmation: bool = False,
+    ) -> dict:
+        result = {
+            "ok": ok,
+            "path": str(path),
+            "requires_confirmation": requires_confirmation,
+        }
+        if exists is not None:
+            result["exists"] = exists
+        if size is not None:
+            result["size"] = size
+        if error:
+            result["error"] = error
+        return result
+
+    def _handle_exception(self, path: Path, exc: Exception, op_name: str) -> dict:
+        if isinstance(exc, NotAllowedPathError):
+            error_message = str(exc)
+        else:
+            error_message = str(exc) or f"Ошибка {op_name}"
+        logger.exception("Ошибка при %s %s: %s", op_name, path, exc)
+        return self._finalize(path, ok=False, error=error_message)
+
+    def _detect_kind_from_path(self, path: Path, fallback: Optional[str] = None) -> str:
+        ext = path.suffix.lower()
+        if ext in KIND_BY_EXTENSION:
+            return KIND_BY_EXTENSION[ext]
+        normalized = self._normalize_kind(fallback)
+        if normalized:
+            return normalized
+        return "txt"
 
     def _sync_write(self, path: Path, content: str, mode: str, encoding: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -184,230 +267,325 @@ class FileManager:
             handler.flush()
             os.fsync(handler.fileno())
 
-    def _write_content(self, path: Path, content: str, *, append: bool, encoding: str) -> None:
-        suffix = path.suffix.lower()
-        if suffix == ".docx":
-            if append:
-                docx_writer.append_docx(path, content)
-            else:
-                docx_writer.write_docx(path, content)
-            return
-        mode = "a" if append else "w"
-        self._sync_write(path, content, mode=mode, encoding=encoding)
-
-    def _collect_info(self, path: Path) -> dict:
-        absolute = path.resolve(strict=False)
-        exists = path.exists()
-        size = path.stat().st_size if exists and path.is_file() else 0
-        return {
-            "path": str(absolute),
-            "exists": exists,
-            "size": size,
-            "verified": exists,
-        }
-
     def create_file(
         self,
         path: str,
+        content: Optional[str] = None,
         *,
-        content: str = "",
+        kind: Optional[str] = None,
         confirmed: bool = False,
         encoding: str = "utf-8",
     ) -> dict:
-        target = self._normalize(path)
-        denied = self.ensure_allowed(target, "создание", confirmed)
+        target = self._resolve_path(path, kind=kind)
+        denied = self._ensure_allowed(target, confirmed, "создания файла")
         if denied:
             return denied
+        logger.info("Создание файла: %s", target)
+        file_kind = self._detect_kind_from_path(target, kind)
         try:
-            existed = target.exists()
-            self._write_content(target, content, append=False, encoding=encoding)
-            info = self._collect_info(target)
-            info.update(
-                {
-                    "ok": bool(info["verified"]),
-                    "requires_confirmation": False,
-                    "status": "updated" if existed else "created",
-                }
-            )
-            return info
+            if file_kind == "docx":
+                target.parent.mkdir(parents=True, exist_ok=True)
+                document = Document()
+                if content:
+                    document.add_paragraph(content)
+                document.save(str(target))
+            elif file_kind == "xlsx":
+                target.parent.mkdir(parents=True, exist_ok=True)
+                workbook = Workbook()
+                sheet = workbook.active
+                if content:
+                    sheet["A1"] = str(content)
+                workbook.save(str(target))
+            elif file_kind == "pptx":
+                target.parent.mkdir(parents=True, exist_ok=True)
+                presentation = Presentation()
+                layout = presentation.slide_layouts[1] if len(presentation.slide_layouts) > 1 else presentation.slide_layouts[0]
+                slide = presentation.slides.add_slide(layout)
+                if content:
+                    applied = False
+                    title = getattr(slide.shapes, "title", None)
+                    if title is not None and getattr(title, "has_text_frame", False):
+                        title.text = content
+                        applied = True
+                    for shape in slide.shapes:
+                        if getattr(shape, "has_text_frame", False):
+                            shape.text_frame.text = content
+                            applied = True
+                            break
+                    if not applied:
+                        textbox = slide.shapes.add_textbox(
+                            Inches(1), Inches(1.5), Inches(8), Inches(2)
+                        )
+                        textbox.text_frame.text = content
+                presentation.save(str(target))
+            else:
+                text = content if content is not None else ""
+                self._sync_write(target, text, mode="w", encoding=encoding)
+            exists, size = self._inspect(target)
+            logger.info("Создание завершено: %s exists=%s size=%s", target, exists, size)
+            return self._finalize(target, ok=exists, exists=exists, size=size)
         except Exception as exc:
-            logger.exception("Не удалось создать файл %s", target)
-            return {
-                "ok": False,
-                "path": str(target.resolve(strict=False)),
-                "requires_confirmation": False,
-                "error": str(exc),
-                "verified": False,
-            }
+            return self._handle_exception(target, exc, "создании файла")
 
-    def write_text(self, path: str, content: str, *, confirmed: bool = False, encoding: str = "utf-8") -> dict:
-        target = self._normalize(path)
-        denied = self.ensure_allowed(target, "запись", confirmed)
+    def write_text(
+        self,
+        path: str,
+        content: str,
+        *,
+        confirmed: bool = False,
+        encoding: str = "utf-8",
+    ) -> dict:
+        target = self._resolve_path(path)
+        denied = self._ensure_allowed(target, confirmed, "записи файла")
         if denied:
             return denied
+        logger.info("Запись текста в файл: %s", target)
         try:
-            self._write_content(target, content, append=False, encoding=encoding)
-            info = self._collect_info(target)
-            info.update(
-                {
-                    "ok": bool(info["verified"]),
-                    "requires_confirmation": False,
-                    "status": "overwritten",
-                }
-            )
-            return info
+            self._sync_write(target, content, mode="w", encoding=encoding)
+            exists, size = self._inspect(target)
+            logger.info("Запись завершена: %s exists=%s size=%s", target, exists, size)
+            return self._finalize(target, ok=exists, exists=exists, size=size)
         except Exception as exc:
-            logger.exception("Не удалось выполнить запись в %s", target)
-            return {
-                "ok": False,
-                "path": str(target.resolve(strict=False)),
-                "requires_confirmation": False,
-                "error": str(exc),
-                "verified": False,
-            }
+            return self._handle_exception(target, exc, "записи файла")
 
-    def append_text(self, path: str, content: str, *, confirmed: bool = False, encoding: str = "utf-8") -> dict:
-        target = self._normalize(path)
-        denied = self.ensure_allowed(target, "добавление", confirmed)
+    def append_text(
+        self,
+        path: str,
+        content: str,
+        *,
+        confirmed: bool = False,
+        encoding: str = "utf-8",
+    ) -> dict:
+        target = self._resolve_path(path)
+        denied = self._ensure_allowed(target, confirmed, "добавления текста")
         if denied:
             return denied
+        logger.info("Добавление текста в файл: %s", target)
         try:
-            existed = target.exists()
-            self._write_content(target, content, append=True, encoding=encoding)
-            info = self._collect_info(target)
-            info.update(
-                {
-                    "ok": bool(info["verified"]),
-                    "requires_confirmation": False,
-                    "status": "appended" if existed else "created",
-                }
-            )
-            return info
+            mode = "a" if target.exists() else "w"
+            self._sync_write(target, content, mode=mode, encoding=encoding)
+            exists, size = self._inspect(target)
+            logger.info("Добавление завершено: %s exists=%s size=%s", target, exists, size)
+            return self._finalize(target, ok=exists, exists=exists, size=size)
         except Exception as exc:
-            logger.exception("Не удалось дополнить файл %s", target)
-            return {
-                "ok": False,
-                "path": str(target.resolve(strict=False)),
-                "requires_confirmation": False,
-                "error": str(exc),
-                "verified": False,
-            }
+            return self._handle_exception(target, exc, "добавлении текста")
 
-    def list_directory(self, path: str | None = None, *, confirmed: bool = False) -> dict:
-        directory = self._default_root if path is None else self._normalize(path)
-        denied = self.ensure_allowed(directory, "просмотр", confirmed)
-        if denied:
-            return denied
+    def read_text(self, path: str, encoding: str = "utf-8") -> dict:
+        target = self._resolve_path(path)
+        logger.info("Чтение файла: %s", target)
+        if target.suffix.lower() != ".txt":
+            error = "Чтение доступно только для текстовых файлов"
+            logger.error("%s: %s", error, target)
+            return self._finalize(target, ok=False, exists=target.exists(), error=error)
         try:
-            if not directory.exists() or not directory.is_dir():
-                raise FileNotFoundError(f"Каталог {directory} не найден")
-            items = [
-                item.name
-                for item in sorted(directory.iterdir(), key=lambda candidate: candidate.name.lower())
-                if not is_path_hidden(item)
-            ]
+            content = target.read_text(encoding=encoding)
+            exists, size = self._inspect(target)
+            logger.info("Чтение завершено: %s exists=%s size=%s", target, exists, size)
             return {
                 "ok": True,
-                "path": str(directory.resolve(strict=False)),
-                "items": items,
+                "path": str(target),
+                "content": content,
+                "exists": exists,
+                "size": size,
                 "requires_confirmation": False,
-                "verified": True,
             }
         except Exception as exc:
-            logger.exception("Не удалось получить список каталога %s", directory)
-            return {
-                "ok": False,
-                "path": str(directory.resolve(strict=False)),
-                "requires_confirmation": False,
-                "error": str(exc),
-                "verified": False,
-            }
+            return self._handle_exception(target, exc, "чтении файла")
 
-    def open_path(self, path: str) -> dict:
-        target = self._normalize(path)
-        return open_path(str(target))
-
-    def copy_path(self, src: str, dst: str, *, confirmed: bool = False) -> dict:
-        source = self._normalize(src)
-        destination = self._normalize(dst)
-        denied = self.ensure_allowed(destination, "копирование", confirmed)
+    def edit_word(
+        self,
+        path: str,
+        content: str,
+        *,
+        confirmed: bool = False,
+    ) -> dict:
+        target = self._resolve_path(path, kind="docx")
+        denied = self._ensure_allowed(target, confirmed, "редактирования документа")
         if denied:
             return denied
+        logger.info("Редактирование Word-документа: %s", target)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                document = Document(str(target))
+            else:
+                document = Document()
+            document.add_paragraph(content)
+            document.save(str(target))
+            exists, size = self._inspect(target)
+            logger.info("Word-документ обновлён: %s exists=%s size=%s", target, exists, size)
+            return self._finalize(target, ok=exists, exists=exists, size=size)
+        except Exception as exc:
+            return self._handle_exception(target, exc, "редактировании документа")
+
+    def edit_excel(
+        self,
+        path: str,
+        cell: str,
+        value: str,
+        *,
+        confirmed: bool = False,
+    ) -> dict:
+        target = self._resolve_path(path, kind="xlsx")
+        denied = self._ensure_allowed(target, confirmed, "редактирования таблицы")
+        if denied:
+            return denied
+        logger.info("Редактирование Excel-файла: %s", target)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                workbook = load_workbook(str(target))
+            else:
+                workbook = Workbook()
+            sheet = workbook.active
+            sheet[str(cell).upper()] = value
+            workbook.save(str(target))
+            exists, size = self._inspect(target)
+            logger.info("Excel-файл обновлён: %s exists=%s size=%s", target, exists, size)
+            return self._finalize(target, ok=exists, exists=exists, size=size)
+        except Exception as exc:
+            return self._handle_exception(target, exc, "редактировании таблицы")
+
+    def edit_pptx(
+        self,
+        path: str,
+        content: str,
+        *,
+        confirmed: bool = False,
+    ) -> dict:
+        target = self._resolve_path(path, kind="pptx")
+        denied = self._ensure_allowed(target, confirmed, "редактирования презентации")
+        if denied:
+            return denied
+        logger.info("Редактирование презентации: %s", target)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            presentation = Presentation(str(target)) if target.exists() else Presentation()
+            layout = presentation.slide_layouts[1] if len(presentation.slide_layouts) > 1 else presentation.slide_layouts[0]
+            slide = presentation.slides.add_slide(layout)
+            if content:
+                applied = False
+                title = getattr(slide.shapes, "title", None)
+                if title is not None and getattr(title, "has_text_frame", False):
+                    title.text = content
+                    applied = True
+                for shape in slide.shapes:
+                    if getattr(shape, "has_text_frame", False):
+                        shape.text_frame.text = content
+                        applied = True
+                        break
+                if not applied:
+                    textbox = slide.shapes.add_textbox(Inches(1), Inches(1.5), Inches(8), Inches(2))
+                    textbox.text_frame.text = content
+            presentation.save(str(target))
+            exists, size = self._inspect(target)
+            logger.info("Презентация обновлена: %s exists=%s size=%s", target, exists, size)
+            return self._finalize(target, ok=exists, exists=exists, size=size)
+        except Exception as exc:
+            return self._handle_exception(target, exc, "редактировании презентации")
+
+    def open_path(self, path: str) -> dict:
+        target = self._resolve_path(path)
+        logger.info("Открытие пути: %s", target)
+        if not target.exists():
+            logger.error("Путь не существует: %s", target)
+            return self._finalize(target, ok=False, exists=False, error="Путь не существует")
+        actual = _resolve_shortcut(target)
+        resolved = actual.resolve(strict=False)
+        try:
+            if os.name == "nt":
+                os.startfile(str(actual))  # type: ignore[attr-defined]
+            else:
+                if actual.is_dir():
+                    subprocess.Popen(["xdg-open", str(actual)])  # noqa: S603,S607 pragma: no cover - для *nix
+                else:
+                    open_with_shell(str(actual))
+        except Exception as exc:  # pragma: no cover - системные ошибки
+            logger.exception("Ошибка открытия %s: %s", resolved, exc)
+            exists, size = self._inspect(resolved)
+            return self._finalize(resolved, ok=False, exists=exists, size=size, error=str(exc))
+        logger.info("Путь открыт: %s", resolved)
+        exists, size = self._inspect(resolved)
+        return self._finalize(resolved, ok=True, exists=exists, size=size)
+
+    def move_path(self, src: str, dst: str, *, confirmed: bool = False) -> dict:
+        source = self._resolve_path(src)
+        destination = self._resolve_path(dst)
+        denied_src = self._ensure_allowed(source, confirmed, "перемещения файла")
+        if denied_src:
+            return denied_src
+        denied_dst = self._ensure_allowed(destination, confirmed, "перемещения файла")
+        if denied_dst:
+            return denied_dst
+        logger.info("Перемещение: %s -> %s", source, destination)
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(destination))
+            exists, size = self._inspect(destination)
+            logger.info("Перемещение завершено: %s exists=%s size=%s", destination, exists, size)
+            return self._finalize(destination, ok=exists, exists=exists, size=size)
+        except Exception as exc:
+            return self._handle_exception(destination, exc, "перемещении файла")
+
+    def copy_path(self, src: str, dst: str, *, confirmed: bool = False) -> dict:
+        source = self._resolve_path(src)
+        destination = self._resolve_path(dst)
+        denied_src = self._ensure_allowed(source, confirmed, "копирования файла")
+        if denied_src:
+            return denied_src
+        denied_dst = self._ensure_allowed(destination, confirmed, "копирования файла")
+        if denied_dst:
+            return denied_dst
+        logger.info("Копирование: %s -> %s", source, destination)
         try:
             if source.is_dir():
                 shutil.copytree(source, destination, dirs_exist_ok=True)
             else:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
-            exists = destination.exists()
-            return {
-                "ok": exists,
-                "path": str(destination.resolve(strict=False)),
-                "exists": exists,
-                "requires_confirmation": False,
-                "verified": exists,
-            }
+            exists, size = self._inspect(destination)
+            logger.info("Копирование завершено: %s exists=%s size=%s", destination, exists, size)
+            return self._finalize(destination, ok=exists, exists=exists, size=size)
         except Exception as exc:
-            logger.exception("Не удалось скопировать %s в %s", source, destination)
-            return {
-                "ok": False,
-                "path": str(destination.resolve(strict=False)),
-                "requires_confirmation": False,
-                "error": str(exc),
-                "verified": False,
-            }
-
-    def move_path(self, src: str, dst: str, *, confirmed: bool = False) -> dict:
-        source = self._normalize(src)
-        destination = self._normalize(dst)
-        denied = self.ensure_allowed(destination, "перемещение", confirmed)
-        if denied:
-            return denied
-        try:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(source, destination)
-            exists = destination.exists()
-            return {
-                "ok": exists,
-                "path": str(destination.resolve(strict=False)),
-                "exists": exists,
-                "requires_confirmation": False,
-                "verified": exists,
-            }
-        except Exception as exc:
-            logger.exception("Не удалось переместить %s в %s", source, destination)
-            return {
-                "ok": False,
-                "path": str(destination.resolve(strict=False)),
-                "requires_confirmation": False,
-                "error": str(exc),
-                "verified": False,
-            }
+            return self._handle_exception(destination, exc, "копировании файла")
 
     def delete_path(self, path: str, *, confirmed: bool = False) -> dict:
-        target = self._normalize(path)
-        denied = self.ensure_allowed(target, "удаление", confirmed)
+        target = self._resolve_path(path)
+        denied = self._ensure_allowed(target, confirmed, "удаления файла")
         if denied:
             return denied
+        logger.info("Удаление: %s", target)
         try:
             if target.is_dir():
                 shutil.rmtree(target, ignore_errors=False)
             elif target.exists():
                 target.unlink()
-            exists = target.exists()
+            exists, _ = self._inspect(target)
+            logger.info("Удаление завершено: %s exists=%s", target, exists)
+            return self._finalize(target, ok=not exists, exists=exists)
+        except Exception as exc:
+            return self._handle_exception(target, exc, "удалении файла")
+
+    def list_directory(self, path: Optional[str] = None, *, confirmed: bool = False) -> dict:
+        directory = self._default_root if path is None else self._resolve_path(path)
+        denied = self._ensure_allowed(directory, confirmed, "просмотра каталога")
+        if denied:
+            return denied
+        logger.info("Просмотр каталога: %s", directory)
+        try:
+            if not directory.exists() or not directory.is_dir():
+                raise FileOperationError(f"Каталог {directory} не найден")
+            items = [
+                item.name
+                for item in sorted(directory.iterdir(), key=lambda candidate: candidate.name.lower())
+                if not is_path_hidden(item)
+            ]
+            logger.info("Каталог %s содержит %d элементов", directory, len(items))
             return {
-                "ok": not exists,
-                "path": str(target.resolve(strict=False)),
-                "exists": exists,
+                "ok": True,
+                "path": str(directory),
+                "items": items,
                 "requires_confirmation": False,
-                "verified": not exists,
             }
         except Exception as exc:
-            logger.exception("Не удалось удалить %s", target)
-            return {
-                "ok": False,
-                "path": str(target.resolve(strict=False)),
-                "requires_confirmation": False,
-                "error": str(exc),
-                "verified": False,
-            }
+            return self._handle_exception(directory, exc, "просмотре каталога")
