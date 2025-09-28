@@ -8,6 +8,9 @@ rich==13.9.3
 prompt_toolkit==3.0.47
 rapidfuzz==3.5.2
 
+# Системные утилиты
+psutil==5.9.8
+
 # Автоматизация браузера
 playwright==1.45.0
 
