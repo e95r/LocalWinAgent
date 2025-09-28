@@ -1,6 +1,7 @@
 """Точка входа для FastAPI сервера LocalWinAgent."""
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Dict
@@ -49,12 +50,12 @@ intent_router = IntentRouter()
 class ConnectionManager:
     def __init__(self) -> None:
         self.sessions: Dict[int, AgentSession] = {}
-        self.session_states: Dict[int, SessionState] = {}
+        self.session_states: Dict[int, dict] = {}
 
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
         self.sessions[id(websocket)] = AgentSession()
-        self.session_states[id(websocket)] = SessionState()
+        self.session_states[id(websocket)] = {"session_state": SessionState()}
         logger.info("Новое подключение WebSocket: %s", id(websocket))
 
     def disconnect(self, websocket: WebSocket) -> None:
@@ -67,7 +68,7 @@ class ConnectionManager:
     def get_session(self, websocket: WebSocket) -> AgentSession:
         return self.sessions[id(websocket)]
 
-    def get_state(self, websocket: WebSocket) -> SessionState:
+    def get_state(self, websocket: WebSocket) -> dict:
         return self.session_states[id(websocket)]
 
 
@@ -91,14 +92,31 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     state = manager.get_state(websocket)
     try:
         while True:
-            data = await websocket.receive_json()
-            message = data.get("message", "")
-            auto_confirm = bool(data.get("auto_confirm", False))
-            confirm = bool(data.get("confirm", False))
+            payload = await websocket.receive_text()
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                logger.warning("Некорректный JSON от клиента: %s", payload)
+                await websocket.send_json(
+                    {
+                        "response": "Ошибка: некорректный формат сообщения",
+                        "requires_confirmation": False,
+                        "ok": False,
+                        "model": session.model,
+                    }
+                )
+                continue
+
+            message = str(data.get("message", ""))
+            auto_present = "auto_confirm" in data
+            force_present = "force_confirm" in data
+            auto_value = bool(data.get("auto_confirm", False))
+            force_value = bool(data.get("force_confirm", False))
             model = data.get("model")
 
-            session.auto_confirm = auto_confirm
-            if model:
+            if auto_present:
+                session.auto_confirm = auto_value
+            if isinstance(model, str) and model:
                 session.model = model
 
             logger.info("Сообщение от клиента: %s", message)
@@ -106,7 +124,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 message,
                 session,
                 state,
-                force_confirm=confirm,
+                auto_confirm=auto_value if auto_present else None,
+                force_confirm=force_value if force_present else None,
             )
             payload = {
                 "response": response["reply"],

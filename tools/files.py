@@ -8,7 +8,7 @@ import platform
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 import config
 from tools.apps import open_with_shell
@@ -89,19 +89,31 @@ def open_path(path: str) -> dict:
     target = normalize_path(path)
     if not target.exists():
         reply = f"Путь не найден: {target}"
-        return {"ok": False, "path": str(target), "exists": False, "reply": reply, "error": "Путь не существует"}
+        return {
+            "ok": False,
+            "path": str(target.resolve(strict=False)),
+            "exists": False,
+            "reply": reply,
+            "error": "Путь не существует",
+        }
 
     actual = _resolve_shortcut(target)
     try:
-        os.startfile(str(actual))  # type: ignore[attr-defined]
-    except AttributeError:  # pragma: no cover - не Windows
-        process = open_with_shell(str(actual))
-        if process is None:
-            reply = f"Не удалось открыть: {actual}"
-            return {"ok": False, "path": str(actual), "reply": reply, "error": "Не удалось открыть"}
+        if platform.system() == "Windows":
+            os.startfile(str(actual))  # type: ignore[attr-defined]
+        else:  # pragma: no cover - не Windows
+            process = open_with_shell(str(actual))
+            if process is None:
+                raise RuntimeError("Не удалось открыть путь через оболочку")
     except Exception as exc:  # pragma: no cover - системные ошибки Windows
         reply = f"Не удалось открыть: {actual}"
-        return {"ok": False, "path": str(actual), "exists": actual.exists(), "reply": reply, "error": str(exc)}
+        return {
+            "ok": False,
+            "path": str(actual.resolve(strict=False)),
+            "exists": actual.exists(),
+            "reply": reply,
+            "error": str(exc),
+        }
 
     resolved = actual.resolve(strict=False)
     reply = f"Открыто: {resolved}"
@@ -151,9 +163,17 @@ class FileManager:
     def requires_confirmation(self, path: Path) -> bool:
         return not self._is_allowed(path)
 
-    def ensure_allowed(self, path: Path, action: str, confirmed: bool) -> None:
+    def ensure_allowed(self, path: Path, action: str, confirmed: bool) -> Optional[dict]:
         if self.requires_confirmation(path) and not confirmed:
-            raise ConfirmationRequiredError(path, action)
+            absolute = path.resolve(strict=False)
+            logger.warning("Требуется подтверждение для %s: %s", action, absolute)
+            return {
+                "ok": False,
+                "path": str(absolute),
+                "requires_confirmation": True,
+                "error": "Требуется подтверждение для операции вне белого списка",
+            }
+        return None
 
     def _sync_write(self, path: Path, content: str, mode: str, encoding: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -162,80 +182,197 @@ class FileManager:
             handler.flush()
             os.fsync(handler.fileno())
 
-    def create_file(self, path: str, *, content: str = "", confirmed: bool = False, encoding: str = "utf-8") -> dict:
+    def create_file(
+        self,
+        path: str,
+        *,
+        content: str = "",
+        confirmed: bool = False,
+        encoding: str = "utf-8",
+    ) -> dict:
         target = self._normalize(path)
-        self.ensure_allowed(target, "создание", confirmed)
-        existed = target.exists()
-        mode = "a" if existed else "w"
-        self._sync_write(target, content, mode=mode, encoding=encoding)
-        exists = target.exists()
-        size = target.stat().st_size if exists else 0
-        return {"ok": exists, "path": str(target.resolve(strict=False)), "exists": exists, "size": size}
+        denied = self.ensure_allowed(target, "создание", confirmed)
+        if denied:
+            return denied
+        try:
+            existed = target.exists()
+            mode = "a" if existed else "w"
+            self._sync_write(target, content, mode=mode, encoding=encoding)
+            exists = target.exists()
+            size = target.stat().st_size if exists else 0
+            return {
+                "ok": exists,
+                "path": str(target.resolve(strict=False)),
+                "exists": exists,
+                "size": size,
+                "requires_confirmation": False,
+            }
+        except Exception as exc:
+            logger.exception("Не удалось создать файл %s", target)
+            return {
+                "ok": False,
+                "path": str(target.resolve(strict=False)),
+                "requires_confirmation": False,
+                "error": str(exc),
+            }
 
     def write_text(self, path: str, content: str, *, confirmed: bool = False, encoding: str = "utf-8") -> dict:
         target = self._normalize(path)
-        self.ensure_allowed(target, "запись", confirmed)
-        self._sync_write(target, content, mode="w", encoding=encoding)
-        exists = target.exists()
-        size = target.stat().st_size if exists else 0
-        if not exists:
-            raise FileNotFoundError(f"Не удалось записать файл {target}")
-        return {"ok": True, "path": str(target.resolve(strict=False)), "exists": exists, "size": size}
+        denied = self.ensure_allowed(target, "запись", confirmed)
+        if denied:
+            return denied
+        try:
+            self._sync_write(target, content, mode="w", encoding=encoding)
+            exists = target.exists()
+            size = target.stat().st_size if exists else 0
+            return {
+                "ok": exists,
+                "path": str(target.resolve(strict=False)),
+                "exists": exists,
+                "size": size,
+                "requires_confirmation": False,
+            }
+        except Exception as exc:
+            logger.exception("Не удалось выполнить запись в %s", target)
+            return {
+                "ok": False,
+                "path": str(target.resolve(strict=False)),
+                "requires_confirmation": False,
+                "error": str(exc),
+            }
 
     def append_text(self, path: str, content: str, *, confirmed: bool = False, encoding: str = "utf-8") -> dict:
         target = self._normalize(path)
-        self.ensure_allowed(target, "добавление", confirmed)
-        self._sync_write(target, content, mode="a", encoding=encoding)
-        exists = target.exists()
-        size = target.stat().st_size if exists else 0
-        if not exists:
-            raise FileNotFoundError(f"Не удалось добавить в файл {target}")
-        return {"ok": True, "path": str(target.resolve(strict=False)), "exists": exists, "size": size}
+        denied = self.ensure_allowed(target, "добавление", confirmed)
+        if denied:
+            return denied
+        try:
+            self._sync_write(target, content, mode="a", encoding=encoding)
+            exists = target.exists()
+            size = target.stat().st_size if exists else 0
+            return {
+                "ok": exists,
+                "path": str(target.resolve(strict=False)),
+                "exists": exists,
+                "size": size,
+                "requires_confirmation": False,
+            }
+        except Exception as exc:
+            logger.exception("Не удалось дополнить файл %s", target)
+            return {
+                "ok": False,
+                "path": str(target.resolve(strict=False)),
+                "requires_confirmation": False,
+                "error": str(exc),
+            }
 
     def list_directory(self, path: str | None = None, *, confirmed: bool = False) -> dict:
         directory = self._default_root if path is None else self._normalize(path)
-        self.ensure_allowed(directory, "просмотр", confirmed)
-        if not directory.exists() or not directory.is_dir():
-            raise FileNotFoundError(f"Каталог {directory} не найден")
-        items = [
-            item.name
-            for item in sorted(directory.iterdir(), key=lambda candidate: candidate.name.lower())
-            if not is_path_hidden(item)
-        ]
-        return {"ok": True, "path": str(directory.resolve(strict=False)), "items": items}
+        denied = self.ensure_allowed(directory, "просмотр", confirmed)
+        if denied:
+            return denied
+        try:
+            if not directory.exists() or not directory.is_dir():
+                raise FileNotFoundError(f"Каталог {directory} не найден")
+            items = [
+                item.name
+                for item in sorted(directory.iterdir(), key=lambda candidate: candidate.name.lower())
+                if not is_path_hidden(item)
+            ]
+            return {
+                "ok": True,
+                "path": str(directory.resolve(strict=False)),
+                "items": items,
+                "requires_confirmation": False,
+            }
+        except Exception as exc:
+            logger.exception("Не удалось получить список каталога %s", directory)
+            return {
+                "ok": False,
+                "path": str(directory.resolve(strict=False)),
+                "requires_confirmation": False,
+                "error": str(exc),
+            }
 
-    def open_path(self, path: str, *, confirmed: bool = False) -> dict:
+    def open_path(self, path: str) -> dict:
         target = self._normalize(path)
-        self.ensure_allowed(target, "открытие", confirmed)
         return open_path(str(target))
 
     def copy_path(self, src: str, dst: str, *, confirmed: bool = False) -> dict:
         source = self._normalize(src)
         destination = self._normalize(dst)
-        self.ensure_allowed(destination, "копирование", confirmed)
-        if source.is_dir():
-            shutil.copytree(source, destination, dirs_exist_ok=True)
-        else:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-        exists = destination.exists()
-        return {"ok": exists, "path": str(destination.resolve(strict=False)), "exists": exists}
+        denied = self.ensure_allowed(destination, "копирование", confirmed)
+        if denied:
+            return denied
+        try:
+            if source.is_dir():
+                shutil.copytree(source, destination, dirs_exist_ok=True)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+            exists = destination.exists()
+            return {
+                "ok": exists,
+                "path": str(destination.resolve(strict=False)),
+                "exists": exists,
+                "requires_confirmation": False,
+            }
+        except Exception as exc:
+            logger.exception("Не удалось скопировать %s в %s", source, destination)
+            return {
+                "ok": False,
+                "path": str(destination.resolve(strict=False)),
+                "requires_confirmation": False,
+                "error": str(exc),
+            }
 
     def move_path(self, src: str, dst: str, *, confirmed: bool = False) -> dict:
         source = self._normalize(src)
         destination = self._normalize(dst)
-        self.ensure_allowed(destination, "перемещение", confirmed)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(source, destination)
-        exists = destination.exists()
-        return {"ok": exists, "path": str(destination.resolve(strict=False)), "exists": exists}
+        denied = self.ensure_allowed(destination, "перемещение", confirmed)
+        if denied:
+            return denied
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(source, destination)
+            exists = destination.exists()
+            return {
+                "ok": exists,
+                "path": str(destination.resolve(strict=False)),
+                "exists": exists,
+                "requires_confirmation": False,
+            }
+        except Exception as exc:
+            logger.exception("Не удалось переместить %s в %s", source, destination)
+            return {
+                "ok": False,
+                "path": str(destination.resolve(strict=False)),
+                "requires_confirmation": False,
+                "error": str(exc),
+            }
 
     def delete_path(self, path: str, *, confirmed: bool = False) -> dict:
         target = self._normalize(path)
-        self.ensure_allowed(target, "удаление", confirmed)
-        if target.is_dir():
-            shutil.rmtree(target, ignore_errors=False)
-        elif target.exists():
-            target.unlink()
-        exists = target.exists()
-        return {"ok": not exists, "path": str(target.resolve(strict=False)), "exists": exists}
+        denied = self.ensure_allowed(target, "удаление", confirmed)
+        if denied:
+            return denied
+        try:
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=False)
+            elif target.exists():
+                target.unlink()
+            exists = target.exists()
+            return {
+                "ok": not exists,
+                "path": str(target.resolve(strict=False)),
+                "exists": exists,
+                "requires_confirmation": False,
+            }
+        except Exception as exc:
+            logger.exception("Не удалось удалить %s", target)
+            return {
+                "ok": False,
+                "path": str(target.resolve(strict=False)),
+                "requires_confirmation": False,
+                "error": str(exc),
+            }

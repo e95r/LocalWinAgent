@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.files import ConfirmationRequiredError, FileManager, open_path as module_open_path
+from tools.files import FileManager, open_path as module_open_path
 
 
 @pytest.fixture()
@@ -29,21 +29,25 @@ def test_create_write_append_list_delete(
     result_create = file_manager.create_file(str(target), confirmed=True)
     assert result_create["ok"] is True
     assert Path(result_create["path"]).exists()
+    assert result_create.get("requires_confirmation") is False
 
     result_write = file_manager.write_text(str(target), "привет", confirmed=True)
     assert result_write["ok"] is True
     assert Path(result_write["path"]).read_text(encoding="utf-8") == "привет"
+    assert result_write.get("requires_confirmation") is False
 
     previous_size = result_write["size"]
     result_append = file_manager.append_text(str(target), " мир", confirmed=True)
     assert result_append["size"] > previous_size
     assert Path(result_append["path"]).read_text(encoding="utf-8") == "привет мир"
+    assert result_append.get("requires_confirmation") is False
 
     listing = file_manager.list_directory(str(allow_dir), confirmed=True)
     assert listing["ok"] is True
     assert "sample.txt" in listing["items"]
     assert "desktop.ini" not in listing["items"]
     assert ".secret" not in listing["items"]
+    assert listing.get("requires_confirmation") is False
 
     opened: dict[str, str] = {}
 
@@ -64,13 +68,16 @@ def test_create_write_append_list_delete(
 
     delete_result = file_manager.delete_path(str(target), confirmed=True)
     assert delete_result["ok"] is True
+    assert delete_result.get("requires_confirmation") is False
     assert not Path(delete_result["path"]).exists()
 
 
 def test_requires_confirmation(file_manager: FileManager, tmp_path: Path) -> None:
     outside = tmp_path / "outside.txt"
-    with pytest.raises(ConfirmationRequiredError):
-        file_manager.write_text(str(outside), "данные", confirmed=False)
+    result = file_manager.write_text(str(outside), "данные", confirmed=False)
+    assert result["ok"] is False
+    assert result.get("requires_confirmation") is True
+    assert "подтверждение" in result.get("error", "")
 
 
 def test_module_open_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
