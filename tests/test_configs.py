@@ -14,3 +14,12 @@ def test_paths_whitelist():
     whitelist = paths_cfg.get("whitelist")
     assert isinstance(whitelist, list)
     assert any("Documents" in path for path in whitelist)
+
+
+def test_paths_username_expansion(monkeypatch):
+    refresh_cache()
+    monkeypatch.setenv("USERNAME", "TestUser")
+    paths_cfg = load_config("paths")
+    whitelist = paths_cfg.get("whitelist", [])
+    assert any("TestUser" in path for path in whitelist)
+    assert paths_cfg.get("default_downloads") == r"C:\Users\TestUser\Downloads"
