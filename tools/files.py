@@ -20,6 +20,7 @@ from tools.exceptions import (
 
 try:  # pragma: no cover - импорт проверяется в рантайме
     from docx import Document
+    from docx.opc.exceptions import PackageNotFoundError
 except ImportError as exc:  # pragma: no cover - отсутствие зависимостей
     raise EverythingNotInstalledError("Требуется установить пакет python-docx") from exc
 
@@ -406,11 +407,23 @@ class FileManager:
         logger.info("Редактирование Word-документа: %s", target)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
+            document = None
             if target.exists():
-                document = Document(str(target))
-            else:
+                try:
+                    document = Document(str(target))
+                except PackageNotFoundError:
+                    logger.warning(
+                        "Файл %s повреждён или не является DOCX, создаём новый документ.",
+                        target,
+                    )
+                    document = Document()
+            if document is None:
                 document = Document()
-            document.add_paragraph(content)
+            lines = content.splitlines() if content else [""]
+            if not lines:
+                lines = [""]
+            for line in lines:
+                document.add_paragraph(line)
             document.save(str(target))
             exists, size = self._inspect(target)
             logger.info("Word-документ обновлён: %s exists=%s size=%s", target, exists, size)

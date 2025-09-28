@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import psutil
+
 try:  # pragma: no cover - rapidfuzz может быть недоступен в окружении
     from rapidfuzz import process as fuzz_process  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover
@@ -78,6 +80,18 @@ DEFAULT_APPLICATIONS: Dict[str, Dict[str, object]] = {
         "command": "C:\\Users\\%USERNAME%\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
         "process_name": "Code.exe",
         "aliases": ("vscode", "vs code", "visual studio code", "редактор кода", "код"),
+    },
+    "photos": {
+        "title": "Фотографии",
+        "command": "",
+        "process_name": "ApplicationFrameHost.exe",
+        "aliases": (
+            "фотографии",
+            "просмотр фотографий",
+            "photos",
+            "photo",
+            "viewer",
+        ),
     },
 }
 
@@ -188,6 +202,8 @@ def launch(name_or_alias: str) -> dict:
 
 
 def _resolve_command_path(command: str) -> Optional[str]:
+    if not command:
+        return None
     expanded = _expand_command(command)
     path = Path(expanded)
     if path.exists():
@@ -209,26 +225,43 @@ def is_installed(app_id: str) -> bool:
 
 
 def close(name_or_alias: str) -> dict:
-    key = _match_alias(name_or_alias)
-    if not key:
-        return {"ok": False, "message": f"Не знаю, как закрыть '{name_or_alias}'"}
+    identifier = name_or_alias.strip().lower() if name_or_alias else ""
+    key = _match_alias(identifier) or identifier
     app = _APPLICATIONS.get(key)
-    if not app or not app.process_name:
-        return {"ok": False, "message": f"Нет информации о процессе для '{name_or_alias}'"}
-    system = platform.system()
-    if system != "Windows":  # pragma: no cover - на тестовых ОС имитируем поведение
-        logger.info("Имитируем закрытие '%s'", app.title)
-        return {"ok": True, "message": f"Закрытие '{app.title}' инициировано"}
-    result = subprocess.run(  # noqa: S603
-        ["taskkill", "/IM", app.process_name, "/F"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="ignore",
-    )
-    if result.returncode != 0:
-        return {"ok": False, "message": result.stderr.strip() or "Не удалось завершить процесс"}
-    return {"ok": True, "message": f"Приложение '{app.title}' закрыто"}
+    if not app:
+        return {"ok": False, "message": "Приложение не найдено/не установлено"}
+    process_name = app.process_name.strip()
+    if not process_name:
+        return {"ok": False, "message": "Приложение не найдено/не установлено"}
+    target_name = process_name.lower()
+    matched: List[psutil.Process] = []
+    for process in psutil.process_iter(["name"]):
+        try:
+            name = process.info.get("name")
+            if name and name.lower() == target_name:
+                matched.append(process)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    if not matched:
+        return {"ok": False, "message": "Приложение не найдено/не установлено"}
+    to_wait: List[psutil.Process] = []
+    for process in matched:
+        try:
+            process.terminate()
+            to_wait.append(process)
+        except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+            logger.warning("Не удалось завершить процесс %s: %s", process.pid, exc)
+    _, alive = psutil.wait_procs(to_wait, timeout=3)
+    if alive:
+        for process in alive:
+            try:
+                process.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+                logger.error("Не удалось принудительно завершить процесс %s: %s", process.pid, exc)
+        _, alive = psutil.wait_procs(alive, timeout=2)
+    if alive:
+        return {"ok": False, "message": f"Не удалось закрыть {app.title}"}
+    return {"ok": True, "message": f"Закрыто: {app.title}"}
 
 
 def open_with_shell(path: str) -> Optional[subprocess.Popen[bytes]]:

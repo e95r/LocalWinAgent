@@ -244,10 +244,26 @@ class IntentInferencer:
     LIST_RE = re.compile(r"(?:покажи|показать|список|открой)\s+(?:каталог|директорию|папк[ауи])\s*(?P<path>.+)?", re.IGNORECASE)
     OPEN_FILE_RE = re.compile(r"открой\s+(?:файл|документ|папк[ауи])\s+(?P<path>[\w./\\:-]+)", re.IGNORECASE)
     SEARCH_FILE_RE = re.compile(r"(?:найди|найти|поищи|ищи)\s+(?P<query>.+)", re.IGNORECASE)
+    CLOSE_APP_RE = re.compile(r"(?:закрой(?:те)?|закрыть)\s+(?P<target>.+)", re.IGNORECASE)
     OPEN_GENERIC_RE = re.compile(r"(?:открой|покажи|запусти)\s+(?P<target>.+)", re.IGNORECASE)
     OPEN_BROWSER_RE = re.compile(r"(?:открой|запусти|запустить|открыть)\s+(?:.*\s)?браузер", re.IGNORECASE)
     URL_RE = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
     CONTENT_RE = re.compile(r"(?:с\s+текстом|контент|текст(?:ом)?)\s+(?P<value>.+)", re.IGNORECASE)
+    TXT_PATH_PATTERN = r"(?P<path>\"[^\"]+?\\.txt\"|'[^']+?\\.txt'|«[^»]+?\\.txt»|[\w\s./\\:-]+?\\.txt)"
+    GENERATE_APPEND_PATTERNS = (
+        re.compile(
+            rf"вставь\s+сгенерированн(?:ый|ого)\s+текст\s+в\s+{TXT_PATH_PATTERN}\s*[:：]\s*(?P<prompt>.+)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            rf"сгенерируй\s+текст(?:\s+про)?\s+(?P<prompt>.+?)\s+(?:и\s+)?(?:добавь|вставь|запиши|дополни)\s+(?:его\s+)?(?:в|к)\s+{TXT_PATH_PATTERN}",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            rf"дополни\s+текстовый\s+файл\s+{TXT_PATH_PATTERN}\s+сгенерированн(?:ым|ого)\s+текстом(?:\s+про)?\s+(?P<prompt>.+)",
+            re.IGNORECASE,
+        ),
+    )
 
     TYPE_KEYWORDS: Dict[str, str] = {
         "документ word": ".docx",
@@ -356,6 +372,10 @@ class IntentInferencer:
         if edit_data:
             return edit_data
 
+        generate_append = self._parse_generate_txt_command(message)
+        if generate_append:
+            return generate_append
+
         match = self.WRITE_RE.search(message_core)
         if match:
             path = match.group("path")
@@ -376,6 +396,10 @@ class IntentInferencer:
         match = self.OPEN_FILE_RE.search(message_core)
         if match:
             return {"intent": "open_file", "path": match.group("path")}
+
+        close_data = self._parse_close_app(message)
+        if close_data:
+            return close_data
 
         if self.OPEN_BROWSER_RE.search(message_core):
             return {"intent": "open_browser"}
@@ -509,6 +533,19 @@ class IntentInferencer:
             data["mode"] = "write"
         return data
 
+    def _parse_generate_txt_command(self, message: str) -> Optional[Dict[str, Any]]:
+        for pattern in self.GENERATE_APPEND_PATTERNS:
+            match = pattern.search(message)
+            if not match:
+                continue
+            raw_path = match.group("path").strip()
+            prompt_raw = match.group("prompt").strip()
+            path = self._strip_quotes(raw_path.strip())
+            prompt = self._clean_generated_prompt(prompt_raw)
+            if path and prompt:
+                return {"intent": "generate_append_txt", "path": path, "prompt": prompt}
+        return None
+
     def _detect_kind(self, message: str) -> Optional[str]:
         lowered = message.lower()
         for keyword, mapped in FILE_KIND_ALIASES.items():
@@ -521,6 +558,28 @@ class IntentInferencer:
         if match:
             return match.group("cell")
         return None
+
+    def _parse_close_app(self, message: str) -> Optional[Dict[str, Any]]:
+        match = self.CLOSE_APP_RE.search(message)
+        if not match:
+            return None
+        target_raw = match.group("target")
+        cleaned = re.sub(r"\bпожалуйста\b", "", target_raw, flags=re.IGNORECASE)
+        cleaned = cleaned.strip().strip(".;,!?:")
+        cleaned = self._strip_quotes(cleaned)
+        if not cleaned:
+            return None
+        normalized = cleaned.lower()
+        app_key = self._detect_app(normalized)
+        if not app_key and normalized in self.app_aliases:
+            app_key = self.app_aliases[normalized]
+        return {"intent": "close_app", "name": app_key} if app_key else None
+
+    def _clean_generated_prompt(self, prompt: str) -> str:
+        cleaned = prompt.strip()
+        cleaned = re.split(r"\s+(?:и\s+)?(?:добавь|вставь|запиши|дополни)\b", cleaned, maxsplit=1)[0]
+        cleaned = re.sub(r"\s*(?:пожалуйста|спасибо)\.?$", "", cleaned, flags=re.IGNORECASE)
+        return self._strip_quotes(cleaned.strip(" .\"'»«"))
 
     def _extract_explicit_path(self, message: str, kind: Optional[str] = None) -> Optional[str]:
         preferred_kind = kind.lower() if isinstance(kind, str) else None
@@ -567,6 +626,16 @@ class IntentInferencer:
 
     def _should_search_local(self, normalized: str) -> bool:
         return any(verb in normalized for verb in self.SEARCH_VERBS)
+
+    def _should_search_web(self, normalized: str) -> bool:
+        patterns = (
+            r"\bв интернете\b",
+            r"\bв сети\b",
+            r"\bв гугле\b",
+            r"\bнайди\s+(?:сайт|страницу)\b",
+            r"\bпоиск в интернете\b",
+        )
+        return any(re.search(pattern, normalized) for pattern in patterns)
 
     def _looks_like_path(self, text: str) -> bool:
         lowered = text.lower()
@@ -792,7 +861,7 @@ class IntentRouter:
         session_state.set_results(normalized, "file")
         lines = [f"{idx + 1}) {entry}" for idx, entry in enumerate(normalized[:10])]
         display = "\n".join(lines)
-        reply = f"Нашёл файлы:\n{display}"
+        reply = f"Нашёл:\n{display}"
         return self._make_response(reply, ok=True, items=list(normalized))
 
     def _handle_open_file(self, params: Dict[str, Any], session_state: SessionState) -> Dict[str, Any]:
@@ -835,6 +904,60 @@ class IntentRouter:
         error_message = info.get("error") or "Неизвестная ошибка"
         return self._make_response(f"Не удалось открыть: {error_message}", ok=False, data={"result": info})
 
+    def _handle_close_app(self, params: Dict[str, Any], session_state: SessionState) -> Dict[str, Any]:
+        name_raw = params.get("name") or params.get("app") or params.get("target")
+        if not name_raw:
+            return self._make_response("Не указано приложение для закрытия.", ok=False)
+        result = apps_module.close(str(name_raw))
+        message = result.get("message") or "Не удалось закрыть приложение."
+        if result.get("ok"):
+            return self._make_response(message, ok=True, data={"result": result})
+        return self._make_response(message, ok=False, data={"result": result})
+
+    def _handle_generate_append_txt(
+        self,
+        params: Dict[str, Any],
+        session: AgentSession,
+        session_state: SessionState,
+        confirmed: bool,
+    ) -> Dict[str, Any]:
+        path_value = params.get("path")
+        prompt_value = params.get("prompt")
+        if not path_value:
+            return self._make_response("Не удалось определить файл для дополнения.", ok=False)
+        if not prompt_value:
+            return self._make_response("Не удалось понять запрос для генерации текста.", ok=False)
+        try:
+            model = getattr(session, "model", None)
+            generated = self.llm.generate(str(prompt_value), model=model)
+        except Exception as exc:  # pragma: no cover - внешние ошибки клиента LLM
+            logger.exception("Ошибка генерации текста: %s", exc)
+            return self._make_response(f"Ошибка генерации текста: {exc}", ok=False)
+        if not generated or not str(generated).strip():
+            return self._make_response("Модель не вернула текст для вставки.", ok=False)
+        text_to_append = str(generated)
+        if text_to_append and not text_to_append.endswith("\n"):
+            text_to_append += "\n"
+        info = self.file_manager.append_text(str(path_value), content=text_to_append, confirmed=confirmed)
+        requires_confirmation = bool(info.get("requires_confirmation"))
+        if not info.get("ok"):
+            message = info.get("error") or "Не удалось обновить файл."
+            return self._make_response(
+                message,
+                ok=False,
+                data={"file": info},
+                requires_confirmation=requires_confirmation,
+            )
+        destination = str(info.get("path") or self.file_manager.normalize(str(path_value)))
+        session_state.set_results([destination], "file")
+        reply = f"Я вставил сгенерированный текст в {destination}."
+        return self._make_response(
+            reply,
+            ok=True,
+            data={"file": info, "generated": text_to_append},
+            requires_confirmation=requires_confirmation,
+        )
+
     def _run_intent(
         self,
         intent: str,
@@ -853,11 +976,17 @@ class IntentRouter:
         if intent == "open_browser":
             return self._handle_open_browser(session, params)
 
+        if intent == "close_app":
+            return self._handle_close_app(params, session_state)
+
         if intent == "search_file":
             return self._handle_search_file(params, session_state)
 
         if intent == "open_file":
             return self._handle_open_file(params, session_state)
+
+        if intent == "generate_append_txt":
+            return self._handle_generate_append_txt(params, session, session_state, confirmed)
 
         prepared, confirmation_response = self._prepare_params(intent, params, session, confirmed)
         if confirmation_response is not None:
