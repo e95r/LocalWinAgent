@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import os
 import platform
 from pathlib import Path
 from typing import List, Tuple
@@ -27,6 +28,7 @@ def intent_router(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Tuple[Inte
         raise KeyError(name)
 
     config.refresh_cache()
+    monkeypatch.setenv("LOCALWINAGENT_INLINE_SANDBOX", "1")
     monkeypatch.setattr(config, "load_config", fake_load_config)
     monkeypatch.setattr("intent_router.load_config", fake_load_config)
 
@@ -35,7 +37,7 @@ def intent_router(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Tuple[Inte
     state = SessionState()
 
     if platform.system() != "Windows":
-        monkeypatch.setattr("intent_router.open_path", lambda path: {"ok": True, "path": path, "reply": f"Открыто: {path}"})
+        monkeypatch.setattr("tools.files.open_path", lambda path: {"ok": True, "reply": f"Открыто: {path}"})
         monkeypatch.setattr(os, "startfile", lambda *_args, **_kwargs: None, raising=False)
 
     return router, session, state
@@ -61,8 +63,8 @@ def test_infer_open_file(
         opened.append(path)
         return {"ok": True, "path": path, "reply": f"Открыто: {path}"}
 
-    monkeypatch.setattr("intent_router.search_local", fake_search)
-    monkeypatch.setattr("intent_router.open_path", fake_open)
+    monkeypatch.setattr("tools.search.search_local", fake_search)
+    monkeypatch.setattr("tools.files.open_path", fake_open)
 
     response = router.handle_message("посмотреть скриншот", session, state)
 
@@ -79,7 +81,7 @@ def test_infer_open_app(
     router, session, state = intent_router
     called: List[str] = []
 
-    monkeypatch.setattr(router.app_manager, "launch", lambda key: called.append(key) or "Готово")
+    monkeypatch.setattr("tools.apps.launch", lambda key: called.append(key) or {"ok": True, "message": "Готово"})
 
     response = router.handle_message("запусти калькулятор", session, state)
 
@@ -99,8 +101,11 @@ def test_infer_open_web(
     ]
     opened: List[str] = []
 
-    monkeypatch.setattr("intent_router.search_web", lambda query: results)
-    monkeypatch.setattr("intent_router.open_site", lambda url: opened.append(url) or url)
+    monkeypatch.setattr(
+        "tools.web.search_web",
+        lambda query, max_results=5: [{"title": title, "url": url} for title, url in results],
+    )
+    monkeypatch.setattr("tools.web.open_site", lambda url: opened.append(url) or {"ok": True, "title": url, "url": url})
 
     response = router.handle_message("нужна документация fastapi", session, state)
 
@@ -116,21 +121,24 @@ def test_context_pronoun_after_search(
     tmp_path: Path,
 ) -> None:
     router, session, state = intent_router
-    found = [str(tmp_path / "report.pdf")]
-    monkeypatch.setattr("intent_router.search_local", lambda *args, **kwargs: found)
+    allow_dir = tmp_path / "allow"
+    found = [str((allow_dir / "report.pdf").resolve(strict=False))]
+    monkeypatch.setattr("tools.search.search_local", lambda *args, **kwargs: found)
     opened: List[str] = []
 
     def fake_open(path: str) -> dict:
         opened.append(path)
         return {"ok": True, "path": path, "reply": f"Открыто: {path}"}
 
-    monkeypatch.setattr("intent_router.open_path", fake_open)
+    monkeypatch.setattr("tools.files.open_path", fake_open)
 
     router.handle_message("мне нужен вчерашний отчёт", session, state)
     assert opened == [found[0]]
 
     router.handle_message("открой его", session, state)
-    assert opened == [found[0], found[0]]
+    resolved = [str(Path(path).resolve(strict=False)) for path in opened]
+    expected = [str(Path(found[0]).resolve(strict=False))] * 2
+    assert resolved == expected
 
 
 def test_reset_context(
@@ -140,8 +148,8 @@ def test_reset_context(
 ) -> None:
     router, session, state = intent_router
     found = [str(tmp_path / "video.mp4")]
-    monkeypatch.setattr("intent_router.search_local", lambda *args, **kwargs: found)
-    monkeypatch.setattr("intent_router.open_path", lambda path: {"ok": True, "path": path, "reply": f"Открыто: {path}"})
+    monkeypatch.setattr("tools.search.search_local", lambda *args, **kwargs: found)
+    monkeypatch.setattr("tools.files.open_path", lambda path: {"ok": True, "reply": f"Открыто: {path}"})
 
     router.handle_message("запусти видео", session, state)
     assert state.last_kind == "file"

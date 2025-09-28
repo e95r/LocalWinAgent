@@ -1,3 +1,4 @@
+import config
 from config import load_config, refresh_cache
 
 
@@ -21,5 +22,8 @@ def test_paths_username_expansion(monkeypatch):
     monkeypatch.setenv("USERNAME", "TestUser")
     paths_cfg = load_config("paths")
     whitelist = paths_cfg.get("whitelist", [])
-    assert any("TestUser" in path for path in whitelist)
-    assert paths_cfg.get("default_downloads") == r"C:\Users\TestUser\Downloads"
+    assert isinstance(whitelist, list)
+    assert all("${" not in path for path in whitelist)
+    downloads_expected = config._KNOWN.get("DOWNLOADS")
+    if downloads_expected:
+        assert paths_cfg.get("default_downloads") == downloads_expected

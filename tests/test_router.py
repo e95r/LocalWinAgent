@@ -30,6 +30,7 @@ def router_with_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Dict[str
         raise KeyError(name)
 
     config.refresh_cache()
+    monkeypatch.setenv("LOCALWINAGENT_INLINE_SANDBOX", "1")
     monkeypatch.setattr(config, "load_config", fake_load_config)
     monkeypatch.setattr("intent_router.load_config", fake_load_config)
 
@@ -42,8 +43,10 @@ def router_with_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Dict[str
 
         monkeypatch.setattr(apps_module, "open_with_shell", lambda p: p)
         monkeypatch.setattr(files_module, "open_with_shell", lambda p: p)
+        monkeypatch.setattr("tools.files.open_path", lambda path: {"ok": True, "reply": f"Открыто: {path}"})
     else:
         monkeypatch.setattr(os, "startfile", lambda p: p, raising=False)
+        monkeypatch.setattr("tools.files.open_path", lambda path: {"ok": True, "reply": f"Открыто: {path}"})
 
     return {"router": router, "allow_dir": allow_dir, "monkeypatch": monkeypatch}
 

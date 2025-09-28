@@ -26,6 +26,7 @@ def dialog_router(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> IntentRout
         raise KeyError(name)
 
     config.refresh_cache()
+    monkeypatch.setenv("LOCALWINAGENT_INLINE_SANDBOX", "1")
     monkeypatch.setattr(config, "load_config", fake_load_config)
     monkeypatch.setattr("intent_router.load_config", fake_load_config)
 
@@ -56,7 +57,7 @@ def test_dialog_context(dialog_router: IntentRouter, monkeypatch: pytest.MonkeyP
     ]
     expected_paths = [str(Path(path).expanduser().resolve(strict=False)) for path in fake_results]
 
-    monkeypatch.setattr("intent_router.search_local", lambda *args, **kwargs: expected_paths)
+    monkeypatch.setattr("tools.search.search_local", lambda *args, **kwargs: expected_paths)
 
     opened: List[str] = []
 
@@ -64,7 +65,7 @@ def test_dialog_context(dialog_router: IntentRouter, monkeypatch: pytest.MonkeyP
         opened.append(path)
         return {"ok": True, "path": path, "reply": f"Открыто: {path}"}
 
-    monkeypatch.setattr("intent_router.open_path", fake_open)
+    monkeypatch.setattr("tools.files.open_path", fake_open)
 
     search_response = router.handle_message("найди файл скриншот", session, state)
     assert search_response["ok"] is True

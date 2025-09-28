@@ -170,6 +170,50 @@ LocalWinAgent распознаёт намерения по контексту ф
 - Буфер результатов очищается автоматически через 15 минут бездействия или при выполнении нового поиска.
 - Для ручного сброса скажите «сбрось контекст» или «очисти память».
 
+## Code-as-Actions
+
+Начиная с версии Code-as-Actions все действия агент выполняет через небольшой Python-скрипт, который формируется на лету и исполняется в защищённой песочнице. Скрипты используют API модулей `tools.files`, `tools.apps`, `tools.search`, `tools.web` и всегда возвращают подробный отчёт (`stdout`, `stderr`, структурированные данные).
+
+### Как это работает
+
+1. Пользовательская команда анализируется интент-детектором (`IntentInferencer`).
+2. Агент формирует объект `TaskRequest` и минимальный скрипт с функцией `run(params)`.
+3. Код проверяется, запускается в песочнице (`core/sandbox.py`), а результат упаковывается в `TaskResult`.
+4. Ответ пользователю содержит итоговое сообщение, а также служебные данные (пути, URL, подтверждения).
+
+### Примеры мини-скриптов
+
+Создание файла с текстом:
+
+```python
+from tools.files import FileManager
+
+def run(params):
+    manager = FileManager(params["whitelist"])
+    info = manager.create_file(
+        params["path"],
+        content=params.get("content", ""),
+        confirmed=params.get("confirmed", False),
+    )
+    return {"ok": bool(info.get("ok")), "stdout": f"Создан файл: {info['path']} (exists={info.get('exists')})", "data": {"file": info}}
+```
+
+Локальный поиск и открытие первого результата:
+
+```python
+from tools.files import open_path
+from tools.search import search_local
+
+def run(params):
+    results = search_local(params["query"], whitelist=params["whitelist"], max_results=10)
+    if not results:
+        return {"ok": False, "stdout": "Ничего не найдено", "data": {"results": []}}
+    opened = open_path(results[0])
+    return {"ok": bool(opened.get("ok", False)), "stdout": opened.get("reply", ""), "data": {"results": results}}
+```
+
+Песочница блокирует опасные операции (`os.system`, `eval`, произвольные импорты), ограничивает время выполнения и объём вывода. Благодаря этому код как действие остаётся безопасным, а ответы — максимально прозрачными.
+
 ## Поддержка
 
 В случае вопросов создавайте issue в репозитории или пишите в команду сопровождения.
