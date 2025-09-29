@@ -209,6 +209,7 @@ class AgentSession:
     preferred_browser: Optional[str] = None
     awaiting_browser_choice: bool = False
     available_browsers: tuple[str, ...] = field(default_factory=tuple)
+    streaming_enabled: bool = False
 
 
 @dataclass(slots=True)
@@ -287,6 +288,11 @@ class IntentInferencer:
             r"(?:\s+(?:про|о)\s+|\s+)(?P<prompt>.+)",
             re.IGNORECASE,
         ),
+    )
+    LIST_APPS_PATTERNS = (
+        re.compile(r"покажи\s+список\s+приложений", re.IGNORECASE),
+        re.compile(r"какие\s+программы\s+доступны", re.IGNORECASE),
+        re.compile(r"какие\s+приложения\s+есть", re.IGNORECASE),
     )
 
     TYPE_KEYWORDS: Dict[str, str] = {
@@ -395,6 +401,10 @@ class IntentInferencer:
             "обнови приложения",
         }:
             return {"intent": "refresh_apps"}
+
+        for pattern in self.LIST_APPS_PATTERNS:
+            if pattern.search(normalized):
+                return {"intent": "list_apps"}
 
         create_data = self._parse_create_command(message)
         if create_data:
@@ -844,8 +854,15 @@ class IntentRouter:
                 intent_data = self.intent_inferencer.infer(message)
 
             if not intent_data:
+                if getattr(session, "streaming_enabled", False):
+                    return self._make_response(
+                        "Генерирую ответ…",
+                        ok=True,
+                        data={"prompt": message},
+                        intent="qa",
+                    )
                 llm_response = self.ask_llm(message, model=getattr(session, "model", None))
-                return self._make_response(llm_response, ok=True)
+                return self._make_response(llm_response, ok=True, intent="qa")
 
             intent = intent_data.pop("intent")
             if intent == "open_browser":
@@ -1013,6 +1030,16 @@ class IntentRouter:
             return self._make_response(message, ok=True, data={"result": result})
         error = result.get("error") or "Не удалось обновить список приложений"
         return self._make_response(error, ok=False, data={"result": result})
+
+    def _handle_list_apps(self, session_state: SessionState, limit: int = 20) -> Dict[str, Any]:
+        names = self.apps.list_indexed(limit=limit)
+        if not names:
+            reply = "Пока не найдено ни одного приложения. Скажи: пересканируй приложения."
+            return self._make_response(reply, ok=True, intent="list_apps")
+        session_state.set_results(names, "app")
+        listing = "\n".join(f"{idx}) {name}" for idx, name in enumerate(names, start=1))
+        reply = f"Вот несколько найденных приложений:\n{listing}"
+        return self._make_response(reply, ok=True, items=names, intent="list_apps")
 
     def _handle_open_app(
         self,
@@ -1214,8 +1241,18 @@ class IntentRouter:
             prompt = str(params.get("prompt") or params.get("text") or params.get("message") or "")
             if not prompt and session_state.last_results:
                 prompt = session_state.last_results[0]
+            if getattr(session, "streaming_enabled", False):
+                return self._make_response(
+                    "Генерирую ответ…",
+                    ok=True,
+                    data={"prompt": prompt},
+                    intent="qa",
+                )
             answer = self.ask_llm(prompt or "", model=getattr(session, "model", None))
-            return self._make_response(answer, ok=True)
+            return self._make_response(answer, ok=True, intent="qa")
+
+        if intent == "list_apps":
+            return self._handle_list_apps(session_state)
 
         if intent == "open_browser":
             return self._handle_open_browser(session, params)
@@ -1527,6 +1564,7 @@ class IntentRouter:
         data: Optional[Dict[str, Any]] = None,
         items: Optional[List[Any]] = None,
         requires_confirmation: bool = False,
+        intent: Optional[str] = None,
     ) -> Dict[str, Any]:
         response: Dict[str, Any] = {
             "reply": reply,
@@ -1537,6 +1575,8 @@ class IntentRouter:
             response["data"] = data
         if items is not None:
             response["items"] = items
+        if intent is not None:
+            response["intent"] = intent
         return response
 
     def _build_browser_aliases(self) -> Dict[str, tuple[str, ...]]:
