@@ -1003,112 +1003,108 @@ class IntentRouter:
             return self._make_response(message, ok=True, data={"result": result})
         return self._make_response(message, ok=False, data={"result": result})
 
-from typing import Dict, Any, Optional, List
-import time
+    def _handle_refresh_apps(self) -> Dict[str, Any]:
+        result = self.apps.refresh_index()
+        if result.get("ok"):
+            count = int(result.get("count", 0))
+            # обновляем алиасы в инференсере после пересканирования
+            self.intent_inferencer.app_aliases = get_aliases()
+            message = f"Готово, найдено {count} приложений"
+            return self._make_response(message, ok=True, data={"result": result})
+        error = result.get("error") or "Не удалось обновить список приложений"
+        return self._make_response(error, ok=False, data={"result": result})
 
-# если у тебя IndexedEntry лежит в apps.py — раскомментируй следующую строку:
-from apps import IndexedEntry, get_aliases
+    def _handle_open_app(
+        self,
+        params: Dict[str, Any],
+        session_state: "SessionState",
+    ) -> Dict[str, Any]:
+        name_raw = params.get("name") or params.get("app") or params.get("target")
+        if name_raw is None:
+            return self._make_response("Не указано приложение для открытия.", ok=False)
+        query = str(name_raw).strip()
+        if not query:
+            return self._make_response("Не указано приложение для открытия.", ok=False)
 
-def _handle_refresh_apps(self) -> Dict[str, Any]:
-    result = self.apps.refresh_index()
-    if result.get("ok"):
-        count = int(result.get("count", 0))
-        # обновляем алиасы в инференсере после пересканирования
-        self.intent_inferencer.app_aliases = get_aliases()
-        message = f"Готово, найдено {count} приложений"
-        return self._make_response(message, ok=True, data={"result": result})
-    error = result.get("error") or "Не удалось обновить список приложений"
-    return self._make_response(error, ok=False, data={"result": result})
+        from_context = bool(params.get("from_context"))
+        if from_context:
+            result = self.apps.launch(query)
+            return self._finalize_app_launch(result, session_state, from_context=True, fallback_name=query)
 
-def _handle_open_app(
-    self,
-    params: Dict[str, Any],
-    session_state: "SessionState",
-) -> Dict[str, Any]:
-    name_raw = params.get("name") or params.get("app") or params.get("target")
-    if name_raw is None:
-        return self._make_response("Не указано приложение для открытия.", ok=False)
-    query = str(name_raw).strip()
-    if not query:
-        return self._make_response("Не указано приложение для открытия.", ok=False)
-
-    from_context = bool(params.get("from_context"))
-    if from_context:
-        result = self.apps.launch(query)
-        return self._finalize_app_launch(result, session_state, from_context=True, fallback_name=query)
-
-    ranked: List[IndexedEntry] = self.apps.candidates(query, limit=5)
-    if ranked:
-        best = ranked[0]
-        second_score = ranked[1].score if len(ranked) > 1 else 0.0
-        confident = best.is_manual or (
-            best.score >= 80
-            and (
-                len(ranked) == 1
-                or best.is_manual
-                or second_score < best.score - 5
+        ranked: List[IndexedEntry] = self.apps.candidates(query, limit=5)
+        if ranked:
+            best = ranked[0]
+            second_score = ranked[1].score if len(ranked) > 1 else 0.0
+            confident = best.is_manual or (
+                best.score >= 80
+                and (
+                    len(ranked) == 1
+                    or best.is_manual
+                    or second_score < best.score - 5
+                )
             )
-        )
-        if confident:
-            result = self.apps.launch_entry(best)
-            return self._finalize_app_launch(result, session_state, fallback_name=best.name)
+            if confident:
+                result = self.apps.launch_entry(best)
+                return self._finalize_app_launch(result, session_state, fallback_name=best.name)
 
-    if ranked:
-        names = [entry.name for entry in ranked[:5]]
-        session_state.set_results(names, "app")
-        listing = self._format_app_options(ranked[:5])
-        reply = "Нашёл несколько приложений:\n" + listing + "\nНазовите номер или точное название."
-        return self._make_response(reply, ok=False, items=names)
-
-    # как fallback — попытка прямого запуска по названию
-    result = self.apps.launch(query)
-    if not result.get("ok") and result.get("error") == "ambiguous":
-        raw_options = result.get("candidates") or []
-        options = [str(name) for name in raw_options if name]
-        if options:
-            session_state.set_results(options, "app")
-            listing = "\n".join(f"{idx + 1}) {name}" for idx, name in enumerate(options))
+        if ranked:
+            names = [entry.name for entry in ranked[:5]]
+            session_state.set_results(names, "app")
+            listing = self._format_app_options(ranked[:5])
             reply = "Нашёл несколько приложений:\n" + listing + "\nНазовите номер или точное название."
-            return self._make_response(reply, ok=False, items=options)
+            return self._make_response(reply, ok=False, items=names)
 
-    return self._finalize_app_launch(result, session_state, fallback_name=query)
+        # как fallback — попытка прямого запуска по названию
+        result = self.apps.launch(query)
+        if not result.get("ok") and result.get("error") == "ambiguous":
+            raw_options = result.get("candidates") or []
+            options = [str(name) for name in raw_options if name]
+            if options:
+                session_state.set_results(options, "app")
+                listing = "\n".join(f"{idx + 1}) {name}" for idx, name in enumerate(options))
+                reply = "Нашёл несколько приложений:\n" + listing + "\nНазовите номер или точное название."
+                return self._make_response(reply, ok=False, items=options)
 
-def _finalize_app_launch(
-    self,
-    result: Dict[str, Any],
-    session_state: "SessionState",
-    *,
-    from_context: bool = False,
-    fallback_name: Optional[str] = None,
-) -> Dict[str, Any]:
-    message = result.get("message") or result.get("error") or "Не удалось открыть приложение"
-    ok = bool(result.get("ok"))
-    if ok:
-        launched = result.get("launched") or fallback_name
-        if launched:
-            if from_context:
-                session_state.last_updated = time.time()
+        return self._finalize_app_launch(result, session_state, fallback_name=query)
+
+    def _finalize_app_launch(
+        self,
+        result: Dict[str, Any],
+        session_state: "SessionState",
+        *,
+        from_context: bool = False,
+        fallback_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        message = result.get("message") or result.get("error") or "Не удалось открыть приложение"
+        ok = bool(result.get("ok"))
+        if ok:
+            launched = result.get("launched") or fallback_name
+            if launched:
+                if from_context:
+                    session_state.last_updated = time.time()
+                else:
+                    session_state.set_results([str(launched)], "app")
+        data = {"result": result}
+        return self._make_response(message, ok=ok, data=data)
+
+    @staticmethod
+    def _format_app_options(options: List["IndexedEntry"]) -> str:
+        label_map = {
+            "common": "общая папка",
+            "user": "личная папка",
+            "manual": "ручной список",
+        }
+        lines: List[str] = []
+        for idx, entry in enumerate(options, start=1):
+            if entry.is_manual:
+                source = label_map["manual"]
             else:
-                session_state.set_results([str(launched)], "app")
-    data = {"result": result}
-    return self._make_response(message, ok=ok, data=data)
+                source = label_map.get(entry.source, entry.source)
+            suffix = f" — {source}" if source else ""
+            lines.append(f"{idx}) {entry.name}{suffix}")
+        return "\n".join(lines)
 
-@staticmethod
-def _format_app_options(options: List["IndexedEntry"]) -> str:
-    label_map = {
-        "common": "общая папка",
-        "user": "личная папка",
-        "manual": "ручной список",
-    }
-    lines: List[str] = []
-    for idx, entry in enumerate(options, start=1):
-        if entry.is_manual:
-            source = label_map["manual"]
-        else:
-            source = label_map.get(entry.source, entry.source)
-        suffix = f" — {source}" if source else ""
-        lines.append(f"{idx}) {entry.name}{suffix}")
-    return "\n".join(lines)
+    def _handle_generate_write_file(
         self,
         params: Dict[str, Any],
         session: AgentSession,
