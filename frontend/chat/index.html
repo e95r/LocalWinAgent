@@ -60,6 +60,42 @@
             color: #222;
             border-bottom-left-radius: 0;
         }
+        .items-title {
+            font-weight: 600;
+            margin: 12px 0 6px;
+            color: #1a1a1a;
+        }
+        .items-list {
+            list-style: decimal inside;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .items-list li {
+            display: flex;
+            align-items: center;
+        }
+        .item-button {
+            border: 1px solid #c5ccd6;
+            background: #fff;
+            color: #0f1c2e;
+            border-radius: 8px;
+            padding: 6px 10px;
+            cursor: pointer;
+            transition: background 0.2s ease, box-shadow 0.2s ease;
+            font-size: 14px;
+        }
+        .item-button:hover {
+            background: #eef3fb;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        .items-hint {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #4a5568;
+        }
         form {
             margin-top: 16px;
             display: flex;
@@ -176,20 +212,63 @@
 
     socket.addEventListener('message', (event) => {
         const data = JSON.parse(event.data);
-        addMessage('agent', data.response);
+        addMessage('agent', data.response, data);
         requiresConfirmation = data.requires_confirmation;
         confirmContainer.style.display = requiresConfirmation ? 'flex' : 'none';
     });
 
-    function addMessage(role, text) {
+    function addMessage(role, text, meta = {}) {
         const wrapper = document.createElement('div');
         wrapper.className = `message ${role}`;
         const bubble = document.createElement('div');
         bubble.className = 'bubble';
-        bubble.textContent = text;
+        if (role === 'agent' && meta.intent === 'list_apps' && Array.isArray(meta.items) && meta.items.length) {
+            const [firstLine] = text.split('\n');
+            bubble.textContent = firstLine || text;
+            renderAppList(bubble, meta.items);
+        } else {
+            bubble.textContent = text;
+        }
         wrapper.appendChild(bubble);
         messagesEl.appendChild(wrapper);
         messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function renderAppList(container, items) {
+        const title = document.createElement('div');
+        title.className = 'items-title';
+        title.textContent = 'Найденные программы:';
+        container.appendChild(title);
+
+        const list = document.createElement('ol');
+        list.className = 'items-list';
+
+        items.forEach((item, index) => {
+            if (!item) {
+                return;
+            }
+            const listItem = document.createElement('li');
+            listItem.setAttribute('data-index', String(index + 1));
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'item-button';
+            button.textContent = item;
+            button.addEventListener('click', () => {
+                messageInput.value = `открой ${item}`;
+                messageInput.focus();
+            });
+
+            listItem.appendChild(button);
+            list.appendChild(listItem);
+        });
+
+        container.appendChild(list);
+
+        const hint = document.createElement('div');
+        hint.className = 'items-hint';
+        hint.textContent = 'Нажмите на программу, чтобы быстро подготовить команду на её запуск.';
+        container.appendChild(hint);
     }
 
     formEl.addEventListener('submit', (event) => {
