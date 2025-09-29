@@ -161,6 +161,7 @@ class ApplicationsManager:
         self.alias_map: Dict[str, str] = {}
         self.manual_entries: List[IndexedEntry] = []
         self.index_entries: List[IndexedEntry] = []
+        self.index: List[IndexedEntry] = []
         self.index_by_name: Dict[str, List[IndexedEntry]] = {}
         self._load_manual_config()
         self._init_index()
@@ -183,6 +184,13 @@ class ApplicationsManager:
         self.indexer.save_cache(items)
         self._apply_index_items(items)
         return {"ok": True, "count": len(self.index_entries)}
+
+    def list_indexed(self, limit: int = 20) -> List[str]:
+        if limit is None or limit <= 0:
+            entries = self.index_entries
+        else:
+            entries = self.index_entries[:limit]
+        return [entry.name for entry in entries if entry.name]
 
     def get_known_apps(self) -> Dict[str, Application]:
         return dict(self.manual_apps)
@@ -360,6 +368,7 @@ class ApplicationsManager:
             key = (entry.name.lower(), entry.path, entry.shortcut)
             unique[key] = entry
         self.index_entries = list(unique.values())
+        self.index = list(self.index_entries)
         self._rebuild_index_map()
 
     def _build_manual_entries(self) -> List[IndexedEntry]:
@@ -524,6 +533,10 @@ def refresh_index() -> Dict[str, object]:
     return _MANAGER.refresh_index()
 
 
+def list_indexed(limit: int = 20) -> List[str]:
+    return _MANAGER.list_indexed(limit=limit)
+
+
 def get_known_apps() -> Dict[str, Application]:
     return _MANAGER.get_known_apps()
 
@@ -574,6 +587,7 @@ __all__ = [
     "launch_entry",
     "candidates",
     "refresh_index",
+    "list_indexed",
     "reload",
     "get_known_apps",
     "get_aliases",

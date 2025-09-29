@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Optional
+from typing import AsyncGenerator, Dict, List, Optional
 from urllib import error, request
+
+import httpx
 
 
 class OllamaClient:
@@ -75,3 +77,33 @@ class OllamaClient:
             "stream": stream,
         }
         return self._post("/api/chat", payload, stream=stream)
+
+    async def stream_generate(self, model: str, prompt: str) -> AsyncGenerator[str, None]:
+        """Выполняет потоковую генерацию текста и возвращает части ответа модели."""
+
+        payload: Dict[str, object] = {
+            "model": model or self.default_model,
+            "prompt": prompt,
+            "stream": True,
+        }
+        url = f"{self.base_url}/api/generate"
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("POST", url, json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            message = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        chunk = message.get("response")
+                        if isinstance(chunk, str) and chunk:
+                            yield chunk
+                        if message.get("done"):
+                            break
+        except httpx.HTTPError as exc:
+            yield f"Модель недоступна. Ошибка: {exc}"
+        except Exception as exc:  # pragma: no cover - защита от неожиданных ошибок
+            yield f"Модель недоступна. Ошибка: {exc}"

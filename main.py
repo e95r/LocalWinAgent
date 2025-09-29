@@ -120,6 +120,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 session.model = model
 
             logger.info("Сообщение от клиента: %s", message)
+            session.streaming_enabled = True
             response = intent_router.handle_message(
                 message,
                 session,
@@ -127,6 +128,26 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 auto_confirm=auto_value if auto_present else None,
                 force_confirm=force_value if force_present else None,
             )
+            streaming_requested = session.streaming_enabled
+            session.streaming_enabled = False
+            data_field = response.get("data")
+            prompt_value = ""
+            if isinstance(data_field, dict):
+                prompt_value = str(data_field.get("prompt") or "")
+            should_stream = streaming_requested and response.get("intent") == "qa" and prompt_value
+            if should_stream:
+                prompt = prompt_value
+                model_name = session.model or intent_router.llm.default_model
+                try:
+                    async for chunk in intent_router.llm.stream_generate(model_name, prompt):
+                        if chunk:
+                            await websocket.send_text(chunk)
+                except Exception as exc:  # pragma: no cover - защита от неожиданных ошибок
+                    logger.exception("Ошибка потоковой генерации: %s", exc)
+                    await websocket.send_text(f"Ошибка генерации: {exc}")
+                finally:
+                    await websocket.send_text(json.dumps({"done": True, "model": session.model}))
+                continue
             payload = {
                 "response": response["reply"],
                 "requires_confirmation": response["requires_confirmation"],
@@ -135,6 +156,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             }
             if "items" in response:
                 payload["items"] = response["items"]
+            if "intent" in response:
+                payload["intent"] = response["intent"]
             await websocket.send_json(payload)
     except WebSocketDisconnect:
         manager.disconnect(websocket)

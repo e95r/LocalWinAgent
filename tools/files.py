@@ -7,8 +7,11 @@ import os
 import platform
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
+from xml.sax.saxutils import escape
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import config
 from tools.apps import open_with_shell
@@ -19,10 +22,13 @@ from tools.exceptions import (
 )
 
 try:  # pragma: no cover - импорт проверяется в рантайме
-    from docx import Document
-    from docx.opc.exceptions import PackageNotFoundError
-except ImportError as exc:  # pragma: no cover - отсутствие зависимостей
-    raise EverythingNotInstalledError("Требуется установить пакет python-docx") from exc
+    from docx import Document  # type: ignore
+    from docx.opc.exceptions import PackageNotFoundError  # type: ignore
+except Exception:  # pragma: no cover - отсутствие зависимостей
+    Document = None  # type: ignore[assignment]
+
+    class PackageNotFoundError(Exception):
+        """Заглушка для обработки повреждённых документов."""
 
 try:  # pragma: no cover
     from openpyxl import Workbook, load_workbook
@@ -68,6 +74,56 @@ FILE_KIND_ALIASES = {
     for alias, ext in FILE_TYPE_EXT.items()
     if ext in KIND_BY_EXTENSION
 }
+
+DOCX_CONTENT_TYPES_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+    <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+    <Default Extension="xml" ContentType="application/xml"/>
+    <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+    <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+    <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>
+"""
+
+DOCX_RELS_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>
+"""
+
+DOCX_DOCUMENT_TEMPLATE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" mc:Ignorable="w14 wp14">
+  <w:body>
+{paragraphs}
+    <w:sectPr>
+      <w:pgSz w:w="12240" w:h="15840"/>
+      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/>
+      <w:cols w:space="708"/>
+      <w:docGrid w:linePitch="360"/>
+    </w:sectPr>
+  </w:body>
+</w:document>
+"""
+
+DOCX_DOCUMENT_RELS_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>
+"""
+
+DOCX_CORE_TEMPLATE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <dc:title>Document</dc:title>
+    <dc:creator>LocalWinAgent</dc:creator>
+    <cp:lastModifiedBy>LocalWinAgent</cp:lastModifiedBy>
+    <dcterms:created xsi:type="dcterms:W3CDTF">{timestamp}</dcterms:created>
+    <dcterms:modified xsi:type="dcterms:W3CDTF">{timestamp}</dcterms:modified>
+</cp:coreProperties>
+"""
+
+DOCX_APP_XML = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+    <Application>LocalWinAgent</Application>
+</Properties>
+"""
 
 
 def _expand(path: str | os.PathLike[str]) -> Path:
@@ -198,12 +254,16 @@ class FileManager:
 
     def _make_confirmation(self, path: Path, op_name: str) -> dict:
         logger.warning("Требуется подтверждение для %s: %s", op_name, path)
-        return {
-            "ok": False,
-            "path": str(path),
-            "requires_confirmation": True,
-            "error": f"Требуется подтверждение для {op_name}",
-        }
+        exists, size = self._inspect(path)
+        return self._finalize(
+            path,
+            ok=False,
+            exists=exists,
+            size=size,
+            error=f"Требуется подтверждение для {op_name}",
+            requires_confirmation=True,
+            verified=False,
+        )
 
     def _ensure_allowed(
         self, path: Path, confirmed: bool, op_name: str
@@ -230,6 +290,8 @@ class FileManager:
         size: Optional[int] = None,
         error: Optional[str] = None,
         requires_confirmation: bool = False,
+        status: Optional[str] = None,
+        verified: Optional[bool] = None,
     ) -> dict:
         result = {
             "ok": ok,
@@ -240,6 +302,11 @@ class FileManager:
             result["exists"] = exists
         if size is not None:
             result["size"] = size
+        if status is not None:
+            result["status"] = status
+        if verified is None:
+            verified = ok and not requires_confirmation
+        result["verified"] = verified
         if error:
             result["error"] = error
         return result
@@ -250,7 +317,15 @@ class FileManager:
         else:
             error_message = str(exc) or f"Ошибка {op_name}"
         logger.exception("Ошибка при %s %s: %s", op_name, path, exc)
-        return self._finalize(path, ok=False, error=error_message)
+        exists, size = self._inspect(path)
+        return self._finalize(
+            path,
+            ok=False,
+            exists=exists,
+            size=size,
+            error=error_message,
+            verified=False,
+        )
 
     def _detect_kind_from_path(self, path: Path, fallback: Optional[str] = None) -> str:
         ext = path.suffix.lower()
@@ -268,6 +343,69 @@ class FileManager:
             handler.flush()
             os.fsync(handler.fileno())
 
+    def _prepare_docx_lines(self, content: Optional[str]) -> list[str]:
+        if content is None:
+            return []
+        lines = content.splitlines()
+        if not lines and content:
+            lines = [content]
+        return lines
+
+    def _populate_new_document(self, document: "Document", lines: list[str]) -> None:  # type: ignore[name-defined]
+        target_lines = lines or [""]
+        if document.paragraphs:
+            document.paragraphs[0].text = target_lines[0]
+            remaining = target_lines[1:]
+        else:  # pragma: no cover - защитный блок для нестандартных версий python-docx
+            remaining = target_lines
+            if target_lines:
+                document.add_paragraph(target_lines[0])
+                remaining = target_lines[1:]
+        for line in remaining:
+            document.add_paragraph(line)
+
+    def _write_docx_fallback(self, target: Path, lines: list[str]) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        safe_lines = lines or [""]
+        paragraph_xml_parts = [
+            "    <w:p>\n      <w:r>\n        <w:t xml:space=\"preserve\">{text}</w:t>\n      </w:r>\n    </w:p>".format(
+                text=escape(line)
+            )
+            for line in safe_lines
+        ]
+        paragraphs_xml = "\n".join(paragraph_xml_parts)
+        document_xml = DOCX_DOCUMENT_TEMPLATE.format(paragraphs=paragraphs_xml)
+        timestamp = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        core_xml = DOCX_CORE_TEMPLATE.format(timestamp=timestamp)
+        with ZipFile(str(target), "w", ZIP_DEFLATED) as archive:
+            archive.writestr("[Content_Types].xml", DOCX_CONTENT_TYPES_XML)
+            archive.writestr("_rels/.rels", DOCX_RELS_XML)
+            archive.writestr("word/document.xml", document_xml)
+            archive.writestr("word/_rels/document.xml.rels", DOCX_DOCUMENT_RELS_XML)
+            archive.writestr("docProps/core.xml", core_xml)
+            archive.writestr("docProps/app.xml", DOCX_APP_XML)
+
+    def _write_docx_document(self, target: Path, content: Optional[str]) -> None:
+        lines = self._prepare_docx_lines(content)
+        if Document is None:
+            self._write_docx_fallback(target, lines)
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        document = Document()
+        self._populate_new_document(document, lines)
+        document.save(str(target))
+
+    def _append_docx_document(self, target: Path, lines: list[str], *, document, is_new: bool) -> None:
+        if Document is None:
+            self._write_docx_fallback(target, lines)
+            return
+        if is_new:
+            self._populate_new_document(document, lines)
+        else:
+            for line in lines:
+                document.add_paragraph(line)
+        document.save(str(target))
+
     def create_file(
         self,
         path: str,
@@ -282,14 +420,11 @@ class FileManager:
         if denied:
             return denied
         logger.info("Создание файла: %s", target)
+        existed_before = target.exists()
         file_kind = self._detect_kind_from_path(target, kind)
         try:
             if file_kind == "docx":
-                target.parent.mkdir(parents=True, exist_ok=True)
-                document = Document()
-                if content:
-                    document.add_paragraph(content)
-                document.save(str(target))
+                self._write_docx_document(target, content)
             elif file_kind == "xlsx":
                 target.parent.mkdir(parents=True, exist_ok=True)
                 workbook = Workbook()
@@ -324,7 +459,8 @@ class FileManager:
                 self._sync_write(target, text, mode="w", encoding=encoding)
             exists, size = self._inspect(target)
             logger.info("Создание завершено: %s exists=%s size=%s", target, exists, size)
-            return self._finalize(target, ok=exists, exists=exists, size=size)
+            status = "updated" if existed_before else "created"
+            return self._finalize(target, ok=exists, exists=exists, size=size, status=status)
         except Exception as exc:
             return self._handle_exception(target, exc, "создании файла")
 
@@ -341,11 +477,13 @@ class FileManager:
         if denied:
             return denied
         logger.info("Запись текста в файл: %s", target)
+        existed_before = target.exists()
         try:
             self._sync_write(target, content, mode="w", encoding=encoding)
             exists, size = self._inspect(target)
             logger.info("Запись завершена: %s exists=%s size=%s", target, exists, size)
-            return self._finalize(target, ok=exists, exists=exists, size=size)
+            status = "overwritten" if existed_before else "created"
+            return self._finalize(target, ok=exists, exists=exists, size=size, status=status)
         except Exception as exc:
             return self._handle_exception(target, exc, "записи файла")
 
@@ -362,12 +500,14 @@ class FileManager:
         if denied:
             return denied
         logger.info("Добавление текста в файл: %s", target)
+        existed_before = target.exists()
         try:
             mode = "a" if target.exists() else "w"
             self._sync_write(target, content, mode=mode, encoding=encoding)
             exists, size = self._inspect(target)
             logger.info("Добавление завершено: %s exists=%s size=%s", target, exists, size)
-            return self._finalize(target, ok=exists, exists=exists, size=size)
+            status = "appended" if existed_before else "created"
+            return self._finalize(target, ok=exists, exists=exists, size=size, status=status)
         except Exception as exc:
             return self._handle_exception(target, exc, "добавлении текста")
 
@@ -405,29 +545,40 @@ class FileManager:
         if denied:
             return denied
         logger.info("Редактирование Word-документа: %s", target)
+        existed_before = target.exists()
+        lines = self._prepare_docx_lines(content)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            document = None
-            if target.exists():
-                try:
-                    document = Document(str(target))
-                except PackageNotFoundError:
+            if Document is None:
+                if existed_before:
                     logger.warning(
-                        "Файл %s повреждён или не является DOCX, создаём новый документ.",
+                        "Библиотека python-docx недоступна, пересоздаём документ %s в упрощённом формате.",
                         target,
                     )
+                self._write_docx_fallback(target, lines)
+            else:
+                document = None
+                is_new_document = not existed_before
+                if existed_before:
+                    try:
+                        document = Document(str(target))
+                        is_new_document = False
+                    except (PackageNotFoundError, OSError, ValueError, KeyError) as exc:
+                        logger.warning(
+                            "Файл %s повреждён или недоступен, пересоздаём документ: %s",
+                            target,
+                            exc,
+                        )
+                        document = Document()
+                        is_new_document = True
+                if document is None:
                     document = Document()
-            if document is None:
-                document = Document()
-            lines = content.splitlines() if content else [""]
-            if not lines:
-                lines = [""]
-            for line in lines:
-                document.add_paragraph(line)
-            document.save(str(target))
+                    is_new_document = True
+                self._append_docx_document(target, lines, document=document, is_new=is_new_document)
             exists, size = self._inspect(target)
             logger.info("Word-документ обновлён: %s exists=%s size=%s", target, exists, size)
-            return self._finalize(target, ok=exists, exists=exists, size=size)
+            status = "updated" if existed_before else "created"
+            return self._finalize(target, ok=exists, exists=exists, size=size, status=status)
         except Exception as exc:
             return self._handle_exception(target, exc, "редактировании документа")
 

@@ -7,6 +7,7 @@ pyyaml==6.0.1
 rich==13.9.3
 prompt_toolkit==3.0.47
 rapidfuzz==3.5.2
+httpx==0.27.2
 
 # Системные утилиты
 psutil==5.9.8
