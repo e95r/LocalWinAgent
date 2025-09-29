@@ -9,8 +9,9 @@ import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass, replace
+from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:  # pragma: no cover - psutil может отсутствовать в окружении тестов
     import psutil
@@ -88,6 +89,19 @@ DEFAULT_APPLICATIONS: Dict[str, Dict[str, object]] = {
         "command": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
         "process_name": "msedge.exe",
         "aliases": ("edge", "эдж", "браузер", "microsoft edge", "msedge"),
+    },
+    "yandex_browser": {
+        "title": "Яндекс Браузер",
+        "command": "C:\\Users\\%USERNAME%\\AppData\\Local\\Yandex\\YandexBrowser\\Application\\browser.exe",
+        "process_name": "browser.exe",
+        "aliases": (
+            "яндекс",
+            "яндекс браузер",
+            "yandex",
+            "yandex browser",
+            "ya browser",
+            "браузер яндекс",
+        ),
     },
     "firefox": {
         "title": "Mozilla Firefox",
@@ -273,42 +287,34 @@ class ApplicationsManager:
         if psutil is None:
             return {"ok": False, "message": "Управление процессами недоступно"}
         identifier = name_or_alias.strip().lower() if name_or_alias else ""
-        key = self._match_manual(identifier) or identifier
-        app = self.manual_apps.get(key)
-        if not app:
-            return {"ok": False, "message": "Приложение не найдено/не установлено"}
-        process_name = app.process_name.strip()
-        if not process_name:
-            return {"ok": False, "message": "Приложение не найдено/не установлено"}
-        target_name = process_name.lower()
-        matched: List[psutil.Process] = []
-        for process in psutil.process_iter(["name"]):
-            try:
-                name = process.info.get("name")
-                if name and name.lower() == target_name:
-                    matched.append(process)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        if not matched:
-            return {"ok": False, "message": "Приложение не найдено/не установлено"}
-        to_wait: List[psutil.Process] = []
-        for process in matched:
-            try:
-                process.terminate()
-                to_wait.append(process)
-            except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
-                logger.warning("Не удалось завершить процесс %s: %s", process.pid, exc)
-        _, alive = psutil.wait_procs(to_wait, timeout=3)
-        if alive:
-            for process in alive:
-                try:
-                    process.kill()
-                except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
-                    logger.error("Не удалось принудительно завершить процесс %s: %s", process.pid, exc)
-            _, alive = psutil.wait_procs(alive, timeout=2)
-        if alive:
-            return {"ok": False, "message": f"Не удалось закрыть {app.title}"}
-        return {"ok": True, "message": f"Закрыто: {app.title}"}
+        if not identifier:
+            return {"ok": False, "message": "Не указано приложение"}
+
+        manual_key = self._match_manual(identifier) or (
+            identifier if identifier in self.manual_apps else None
+        )
+        if manual_key:
+            result = self._close_manual(manual_key)
+            if result.get("ok"):
+                return result
+
+        entry_hints: List[str] = []
+        ranked = self.candidates(identifier, limit=5)
+        if ranked:
+            entry_hints.extend(self._derive_process_hints(ranked[0]))
+            if len(ranked) > 1:
+                for entry in ranked[1:3]:
+                    entry_hints.extend(self._derive_process_hints(entry))
+        if entry_hints:
+            result = self._close_by_process_names(entry_hints, ranked[0].name if ranked else name_or_alias)
+            if result.get("ok"):
+                return result
+
+        result = self._close_by_process_query(identifier)
+        if result.get("ok"):
+            return result
+
+        return {"ok": False, "message": "Не удалось найти запущенное приложение"}
 
     # ------------------- внутренние методы -------------------
     def _init_index(self) -> None:
@@ -518,8 +524,154 @@ class ApplicationsManager:
             return {"ok": False, "error": message, "message": message}
         except Exception as exc:  # pragma: no cover
             return {"ok": False, "error": str(exc), "message": str(exc)}
-        message = f"Приложение '{name}' запущено"
-        return {"ok": True, "launched": name, "path": shortcut, "message": message}
+
+    def _close_manual(self, key: str) -> Dict[str, object]:
+        app = self.manual_apps.get(key)
+        if not app:
+            return {"ok": False, "message": "Приложение не найдено"}
+        process_name = app.process_name.strip()
+        if not process_name:
+            return {"ok": False, "message": "Не задан исполняемый файл для приложения"}
+        result = self._close_by_process_names([process_name], app.title)
+        if not result.get("ok"):
+            message = result.get("message") or "Не удалось закрыть приложение"
+            return {"ok": False, "message": message}
+        return result
+
+    def _close_by_process_names(self, process_names: Iterable[str], title: str) -> Dict[str, object]:
+        assert psutil is not None  # для mypy/аннотаций
+        targets = {name.lower() for name in process_names if name}
+        if not targets:
+            return {"ok": False, "message": "Не указаны процессы"}
+        matched: List[Any] = []
+        for process in psutil.process_iter(["name", "exe"]):
+            try:
+                candidates = self._process_tokens(process)
+                if any(token in targets for token in candidates):
+                    matched.append(process)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if not matched:
+            return {"ok": False, "message": f"Не найден запущенный процесс для {title}"}
+        return self._terminate_processes(matched, title)
+
+    def _close_by_process_query(self, query: str) -> Dict[str, object]:
+        assert psutil is not None
+        matches = self._match_processes(query, limit=5)
+        if not matches:
+            return {"ok": False, "message": "Нет подходящих процессов"}
+        top_score = matches[0][0]
+        to_terminate = [process for score, process, _ in matches if score >= max(60.0, top_score - 10)]
+        label = matches[0][2] or query
+        return self._terminate_processes(to_terminate, label)
+
+    def _terminate_processes(self, processes: Iterable[Any], title: str) -> Dict[str, object]:
+        assert psutil is not None
+        processes = list(processes)
+        if not processes:
+            return {"ok": False, "message": "Нет активных процессов"}
+        to_wait: List[Any] = []
+        for process in processes:
+            try:
+                process.terminate()
+                to_wait.append(process)
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+                logger.warning("Не удалось завершить процесс %s: %s", getattr(process, "pid", "?"), exc)
+        alive: List[Any]
+        _, alive = psutil.wait_procs(to_wait, timeout=3)
+        if alive:
+            for process in alive:
+                try:
+                    process.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+                    logger.error("Не удалось принудительно завершить процесс %s: %s", getattr(process, "pid", "?"), exc)
+            _, alive = psutil.wait_procs(alive, timeout=2)
+        if alive:
+            return {"ok": False, "message": f"Не удалось закрыть {title}"}
+        return {"ok": True, "message": f"Закрыто: {title}"}
+
+    def _derive_process_hints(self, entry: IndexedEntry) -> List[str]:
+        hints: List[str] = []
+        if entry.command:
+            hints.append(Path(entry.command).name.lower())
+        if entry.path:
+            hints.append(Path(entry.path).name.lower())
+        if entry.args:
+            try:
+                parts = shlex.split(entry.args, posix=False)
+            except ValueError:
+                parts = []
+            for part in parts:
+                if part.endswith(".exe"):
+                    hints.append(Path(part).name.lower())
+        hints.append(entry.name.lower())
+        seen = set()
+        ordered: List[str] = []
+        for hint in hints:
+            if hint and hint not in seen:
+                ordered.append(hint)
+                seen.add(hint)
+        return ordered
+
+    def _match_processes(self, query: str, limit: int = 5) -> List[Tuple[float, Any, str]]:
+        assert psutil is not None
+        needle = query.strip().lower()
+        if not needle:
+            return []
+        matches: List[Tuple[float, Any, str]] = []
+        for process in psutil.process_iter(["name", "exe", "cmdline"]):
+            try:
+                tokens = self._process_tokens(process)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+            best_score = 0.0
+            best_token = ""
+            for token in tokens:
+                score = self._score_token(needle, token)
+                if score > best_score:
+                    best_score = score
+                    best_token = token
+            if best_score >= 50.0:
+                matches.append((best_score, process, best_token))
+        matches.sort(key=lambda item: item[0], reverse=True)
+        if limit and len(matches) > limit:
+            return matches[:limit]
+        return matches
+
+    def _process_tokens(self, process: Any) -> List[str]:
+        assert psutil is not None
+        tokens: List[str] = []
+        info = getattr(process, "info", {}) or {}
+        try:
+            name = info.get("name") or process.name()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            name = ""
+        exe_path = info.get("exe")
+        cmdline = info.get("cmdline")
+        for value in (name, exe_path):
+            if value:
+                tokens.append(Path(str(value)).name.lower())
+        if exe_path:
+            tokens.append(Path(str(exe_path)).stem.lower())
+        if isinstance(cmdline, (list, tuple)) and cmdline:
+            first = cmdline[0]
+            if first:
+                tokens.append(Path(str(first)).name.lower())
+        tokens = [token for token in tokens if token]
+        return list(dict.fromkeys(tokens))
+
+    def _score_token(self, query: str, token: str) -> float:
+        if token == query:
+            return 100.0
+        if token.startswith(query):
+            return 95.0
+        if query in token:
+            return 85.0
+        if fuzz_process:
+            match = fuzz_process.extractOne(query, [token])
+            if match:
+                return float(match[1])
+        return SequenceMatcher(None, query, token).ratio() * 100.0
 
 
 _MANAGER = ApplicationsManager()
