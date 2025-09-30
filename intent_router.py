@@ -7,6 +7,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -30,6 +31,7 @@ except ModuleNotFoundError:  # pragma: no cover
 from tools.files import FileManager, get_desktop_path, FILE_TYPE_EXT, FILE_KIND_EXT
 from tools import search as search_tools
 from tools.llm_client import OllamaClient
+from tools.web import fetch_page_text, open_site, search_web
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +219,8 @@ class SessionState:
     last_results: List[str] = field(default_factory=list)
     last_kind: str = "none"
     last_updated: float = 0.0
+    last_summary: str = ""
+    last_summary_sources: List[str] = field(default_factory=list)
 
     def set_results(self, results: List[str], kind: str) -> None:
         filtered = [item for item in results if item]
@@ -231,6 +235,8 @@ class SessionState:
         self.last_results = []
         self.last_kind = "none"
         self.last_updated = 0.0
+        self.last_summary = ""
+        self.last_summary_sources = []
 
     def get_results(self, kind: Optional[str] = None) -> List[str]:
         if kind and kind != self.last_kind:
@@ -824,6 +830,10 @@ class IntentRouter:
             normalized = message.lower().strip()
             normalized_clean = normalized.rstrip(" ?!.")
 
+            save_response = self._handle_save_summary_request(message, normalized, session_state, confirmed_flag)
+            if save_response:
+                return save_response
+
             if session.awaiting_browser_choice:
                 choice = self._resolve_browser_choice(normalized, session.available_browsers or None)
                 if choice:
@@ -1296,7 +1306,7 @@ class IntentRouter:
             return self._make_response("Действие пока не поддерживается.", ok=False)
         request = TaskRequest(id=str(uuid.uuid4()), title=intent, intent=intent, params=prepared)
         result = compile_and_run(code, request.params)
-        return self._format_response(request, result, session_state)
+        return self._format_response(request, result, session_state, session)
 
     def _prepare_params(
         self,
@@ -1482,7 +1492,13 @@ class IntentRouter:
         suffix = f" ({', '.join(extras)})" if extras else ""
         reply = f"{prefix}: {path_display}{suffix}"
         return self._make_response(reply, ok=True, data={"result": info})
-    def _format_response(self, request: TaskRequest, result: TaskResult, session_state: SessionState) -> Dict[str, Any]:
+    def _format_response(
+        self,
+        request: TaskRequest,
+        result: TaskResult,
+        session_state: SessionState,
+        session: AgentSession,
+    ) -> Dict[str, Any]:
         data = dict(result.data)
         if result.stdout and "stdout" not in data:
             data["stdout"] = result.stdout
@@ -1527,6 +1543,18 @@ class IntentRouter:
                     if urls:
                         session_state.set_results(urls, "web")
                         items = [item for item in display if item]
+                        summary_info = self._summarize_web_results(
+                            str(request.params.get("query") or ""),
+                            raw_results,
+                            session,
+                        )
+                        if summary_info:
+                            analysis = data.setdefault("analysis", {})
+                            analysis["summary"] = summary_info["summary"]
+                            analysis["sources"] = summary_info["sources"]
+                            reply_override = summary_info["reply"]
+                            session_state.last_summary = summary_info["reply"]
+                            session_state.last_summary_sources = [item["url"] for item in summary_info["sources"]]
             elif request.intent == "open_web":
                 url = data.get("result", {}).get("url") or request.params.get("url")
                 if url and not request.params.get("from_context"):
@@ -1578,6 +1606,152 @@ class IntentRouter:
         if intent is not None:
             response["intent"] = intent
         return response
+
+    def _summarize_web_results(
+        self,
+        query: str,
+        raw_results: List[dict],
+        session: AgentSession,
+        *,
+        limit: int = 3,
+    ) -> Optional[Dict[str, Any]]:
+        """Получить краткий обзор по результатам поиска."""
+
+        pages: List[Dict[str, str]] = []
+        for entry in raw_results:
+            if not isinstance(entry, dict):
+                continue
+            url = str(entry.get("url") or "").strip()
+            if not url:
+                continue
+            fetched = fetch_page_text(url)
+            if not fetched.get("ok"):
+                continue
+            text = str(fetched.get("text") or "").strip()
+            if not text:
+                continue
+            title = str(fetched.get("title") or entry.get("title") or url)
+            final_url = str(fetched.get("url") or url)
+            pages.append({"title": title, "url": final_url, "text": text})
+            if len(pages) >= limit:
+                break
+
+        if not pages:
+            return None
+
+        prompt_parts = [
+            "Ты — аналитик, который готовит краткий отчёт по найденным веб-страницам.",
+            "Подведи итоги на русском языке по запросу пользователя, выдели ключевые факты и общий вывод.",
+            "Не выдумывай информацию и опирайся только на переданные выдержки.",
+        ]
+        if query:
+            prompt_parts.append(f"Запрос пользователя: {query}")
+        prompt_parts.append("Источники ниже отделены заголовками '### Источник N'.")
+
+        context_blocks = []
+        for idx, page in enumerate(pages, start=1):
+            context_blocks.append(
+                f"### Источник {idx}: {page['title']} ({page['url']})\n{page['text']}"
+            )
+
+        prompt = "\n".join(prompt_parts + context_blocks)
+
+        try:
+            summary = self.ask_llm(prompt, model=getattr(session, "model", None)).strip()
+        except Exception as exc:  # pragma: no cover - внешние ошибки клиента LLM
+            logger.exception("Ошибка суммаризации веб-результатов: %s", exc)
+            return None
+
+        if not summary or "Модель недоступна" in summary:
+            return None
+
+        sources = [{"title": page["title"], "url": page["url"]} for page in pages]
+        sources_lines = [f"- {item['title']} — {item['url']}" for item in sources]
+        reply = summary
+        if sources_lines:
+            reply = summary + "\n\nИсточники:\n" + "\n".join(sources_lines)
+
+        return {"summary": summary, "sources": sources, "reply": reply}
+
+    def _handle_save_summary_request(
+        self,
+        message: str,
+        normalized: str,
+        session_state: SessionState,
+        confirmed: bool,
+    ) -> Optional[Dict[str, Any]]:
+        if "сохрани" not in normalized or "в файл" not in normalized:
+            return None
+        summary = session_state.last_summary.strip()
+        if not summary:
+            return self._make_response(
+                "Нет готового обзора для сохранения. Сначала выполните поиск и дождитесь анализа.",
+                ok=False,
+            )
+
+        name_match = re.search(
+            r"в файл(?:\s+под\s+названием)?\s+(\"[^\"]+\"|«[^»]+»|'[^']+'|[\w\s.-]+)",
+            message,
+            flags=re.IGNORECASE,
+        )
+        if name_match:
+            raw_name = name_match.group(1).strip()
+            filename = self._strip_quotes(raw_name)
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"web_summary_{timestamp}.txt"
+
+        sanitized = re.sub(r'[<>:"/\\|?*]', "_", filename).strip() or "web_summary.txt"
+        if not sanitized.lower().endswith(".txt"):
+            sanitized += ".txt"
+
+        info = self.file_manager.create_file(
+            sanitized,
+            content=summary,
+            kind="txt",
+            confirmed=confirmed,
+        )
+
+        requires_confirmation = bool(info.get("requires_confirmation"))
+        if not info.get("ok"):
+            message_text = info.get("error") or "Не удалось сохранить файл."
+            return self._make_response(
+                message_text,
+                ok=False,
+                data={"file": info},
+                requires_confirmation=requires_confirmation,
+            )
+
+        destination = str(info.get("path", sanitized))
+        session_state.set_results([destination], "file")
+        reply = f"Сохранил обзор в {destination}."
+        if session_state.last_summary_sources:
+            reply += "\nМожно открыть файл или продолжить работу."
+
+        return self._make_response(
+            reply,
+            ok=True,
+            data={"file": info, "sources": session_state.last_summary_sources},
+            requires_confirmation=requires_confirmation,
+        )
+
+    @staticmethod
+    def _strip_quotes(value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            return ""
+        quote_pairs = {
+            '"': '"',
+            "'": "'",
+            "«": "»",
+        }
+        opener = trimmed[0]
+        closer = quote_pairs.get(opener)
+        if closer and trimmed.endswith(closer):
+            return trimmed[1:-1]
+        if trimmed.endswith("»") and trimmed.startswith("«"):
+            return trimmed[1:-1]
+        return trimmed
 
     def _build_browser_aliases(self) -> Dict[str, tuple[str, ...]]:
         return {
