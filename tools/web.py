@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 import webbrowser
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import List, Optional
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
 
@@ -76,6 +78,89 @@ class _DuckDuckGoParser(HTMLParser):
             if target:
                 return target[0]
         return url
+
+
+class _SimpleHTMLTextExtractor(HTMLParser):
+    """Простой HTML-парсер для извлечения текста из страницы."""
+
+    _BLOCK_TAGS = {
+        "p",
+        "div",
+        "section",
+        "article",
+        "main",
+        "header",
+        "footer",
+        "nav",
+        "li",
+        "ul",
+        "ol",
+        "table",
+        "tr",
+        "td",
+        "th",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "br",
+        "hr",
+    }
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._skip_depth = 0
+        self._chunks: List[str] = []
+        self._title_parts: List[str] = []
+        self._capture_title = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:  # type: ignore[override]
+        lowered = tag.lower()
+        if lowered in {"script", "style", "noscript"}:
+            self._skip_depth += 1
+            return
+        if lowered == "title":
+            self._capture_title = True
+            return
+        if lowered in self._BLOCK_TAGS:
+            self._append_newline()
+
+    def handle_endtag(self, tag: str) -> None:  # type: ignore[override]
+        lowered = tag.lower()
+        if lowered in {"script", "style", "noscript"} and self._skip_depth:
+            self._skip_depth -= 1
+            return
+        if lowered == "title":
+            self._capture_title = False
+            return
+        if lowered in self._BLOCK_TAGS:
+            self._append_newline()
+
+    def handle_data(self, data: str) -> None:  # type: ignore[override]
+        if self._capture_title:
+            self._title_parts.append(data.strip())
+            return
+        if self._skip_depth:
+            return
+        text = data.strip()
+        if text:
+            self._chunks.append(text)
+
+    def _append_newline(self) -> None:
+        if self._chunks and self._chunks[-1] != "\n":
+            self._chunks.append("\n")
+
+    def get_text(self) -> str:
+        raw = " ".join(self._chunks)
+        raw = re.sub(r"\s*\n\s*", "\n", raw)
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
+        return "\n".join(lines)
+
+    def get_title(self) -> str:
+        title = " ".join(part.strip() for part in self._title_parts if part.strip())
+        return html.unescape(title.strip())
 
 
 def _load_config() -> WebConfig:
@@ -151,3 +236,52 @@ def open_site(url: str) -> dict:
         logger.info("Переход на webbrowser для %s: %s", normalized, exc)
         webbrowser.open(normalized, new=2)
         return {"ok": True, "title": normalized, "url": normalized, "warning": str(exc)}
+
+
+def fetch_page_text(url: str, *, max_chars: int = 6000, max_bytes: int = 250_000) -> dict:
+    """Загрузить страницу и извлечь текстовое содержание."""
+
+    normalized = url.strip()
+    if not normalized:
+        return {"ok": False, "error": "Пустой URL", "url": url}
+
+    parsed = urlparse(normalized)
+    if not parsed.scheme:
+        normalized = "https://" + normalized.lstrip("/")
+
+    request = Request(normalized, headers={"User-Agent": "Mozilla/5.0"})
+
+    try:
+        with urlopen(request, timeout=12) as response:  # noqa: S310 - локальная загрузка
+            raw = response.read(max_bytes)
+            final_url = response.geturl() or normalized
+            charset = response.headers.get_content_charset() if hasattr(response.headers, "get_content_charset") else None
+            encoding = charset or "utf-8"
+            html_text = raw.decode(encoding, errors="ignore")
+    except (URLError, HTTPError, TimeoutError, OSError) as exc:  # pragma: no cover - зависит от сети
+        logger.debug("Не удалось загрузить %s: %s", normalized, exc)
+        return {"ok": False, "error": str(exc), "url": normalized}
+    except Exception as exc:  # pragma: no cover - защита от неожиданных ошибок
+        logger.exception("Ошибка загрузки %s: %s", normalized, exc)
+        return {"ok": False, "error": str(exc), "url": normalized}
+
+    parser = _SimpleHTMLTextExtractor()
+    try:
+        parser.feed(html_text)
+    except Exception as exc:  # pragma: no cover - защита от неожиданных ошибок
+        logger.debug("Ошибка парсинга HTML %s: %s", normalized, exc)
+        return {"ok": False, "error": str(exc), "url": normalized}
+
+    text = parser.get_text()
+    if not text:
+        return {"ok": False, "error": "Не удалось извлечь текст", "url": normalized}
+
+    collapsed = text[:max_chars].strip()
+    title = parser.get_title() or normalized
+
+    return {
+        "ok": True,
+        "url": final_url if 'final_url' in locals() else normalized,
+        "title": title,
+        "text": collapsed,
+    }
