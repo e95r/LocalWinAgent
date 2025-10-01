@@ -86,3 +86,498 @@ HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
 HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
 Сообщение от клиента: создай в D:\ папку "папка12"
 HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Отключение WebSocket 1257682988432
+WebSocket 1257682988432 отключен
+Новое подключение WebSocket: 2522634672272
+Сообщение от клиента: найди файл aida.rar
+Обнаружен интент: search_file
+Everything вернул код 1
+Сообщение от клиента: найди кр.docx
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: напиши путь до рабочего стола
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Отключение WebSocket 2522634672272
+WebSocket 2522634672272 отключен
+Новое подключение WebSocket: 2210690259088
+Сообщение от клиента: найди файл Doom.rar
+Обнаружен интент: search_file
+Everything вернул код 1
+Сообщение от клиента: найди кр.docx
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: найди FAN-2025-07-26_08-17-17-PM
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: открой кр.docx
+Открытие пути: C:\Users\mixai\Desktop\LocalWinAgent\кр.docx (confirmed=True)
+Путь C:\Users\mixai\Desktop\LocalWinAgent\кр.docx не найден для открытия
+Сообщение от клиента: какие файлы есть на рабочем столе
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: напиши путь до рабочего стола
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Отключение WebSocket 2210690259088
+WebSocket 2210690259088 отключен
+Новое подключение WebSocket: 2234513359056
+Сообщение от клиента: найди файл doom.rar
+Обнаружен интент: search_file
+Everything вернул код 1
+Сообщение от клиента: найди кр.docx
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: найди Расписание.png
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: открой
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: открой Расписание.png
+Открытие пути: C:\Users\mixai\Desktop\LocalWinAgent\Расписание.png (confirmed=True)
+Не удалось открыть путь C:\Users\mixai\Desktop\LocalWinAgent\Расписание.png: Путь не найден
+Отключение WebSocket 2234513359056
+WebSocket 2234513359056 отключен
+Новое подключение WebSocket: 2109705731536
+Сообщение от клиента: найди файл doom
+Обнаружен интент: search_file
+Everything вернул код 1
+Сообщение от клиента: найди расписание
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: расписание.png
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: открой его
+Сообщение от клиента: открой расписание.png
+Открытие пути: C:\Users\mixai\Desktop\LocalWinAgent\расписание.png (confirmed=True)
+Не удалось открыть путь C:\Users\mixai\Desktop\LocalWinAgent\расписание.png: Путь не существует
+Сообщение от клиента: найди файл расписание.png
+Обнаружен интент: search_file
+Everything вернул код 1
+Сообщение от клиента: найди расписание.png
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Сообщение от клиента: открой калькулятор
+Открытие пути: C:\Users\mixai\Desktop\LocalWinAgent\калькулятор (confirmed=True)
+Не удалось открыть путь C:\Users\mixai\Desktop\LocalWinAgent\калькулятор: Путь не существует
+Сообщение от клиента: найди в интернете Кинотеатры в узловой
+HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+Отключение WebSocket 2109705731536
+WebSocket 2109705731536 отключен
+Новое подключение WebSocket: 2273080469840
+Сообщение от клиента: найди файл расписание
+Сообщение от клиента: найди файл расписание
+Сообщение от клиента: найди файл расписание на компьютере
+Сообщение от клиента: открой файл расписание.png
+Открытие пути: C:\Users\mixai\Desktop\LocalWinAgent\расписание.png (confirmed=True)
+Не удалось открыть путь C:\Users\mixai\Desktop\LocalWinAgent\расписание.png: Путь не существует
+Сообщение от клиента: что находитяс на рабочем столе
+Запуск приложения Visual Studio Code (C:\Users\mixai\AppData\Local\Programs\Microsoft VS Code\Code.exe)
+Сообщение от клиента: что находится на рабочем столе
+Запуск приложения Visual Studio Code (C:\Users\mixai\AppData\Local\Programs\Microsoft VS Code\Code.exe)
+Сообщение от клиента: открой калькулятор
+Открытие пути: C:\Users\mixai\Desktop\LocalWinAgent\калькулятор (confirmed=True)
+Не удалось открыть путь C:\Users\mixai\Desktop\LocalWinAgent\калькулятор: Путь не существует
+Отключение WebSocket 2273080469840
+WebSocket 2273080469840 отключен
+Новое подключение WebSocket: 1845978617808
+Сообщение от клиента: найди файл doom.rar
+Ошибка в WebSocket: IntentRouter.handle_message() got an unexpected keyword argument 'force_confirm'
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\main.py", line 105, in websocket_endpoint
+    response = intent_router.handle_message(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: IntentRouter.handle_message() got an unexpected keyword argument 'force_confirm'
+Отключение WebSocket 1845978617808
+Новое подключение WebSocket: 2427436228240
+Сообщение от клиента: найди файл расписание.png
+Сообщение от клиента: найди файл DOOM.rar
+Сообщение от клиента: найди но не открывай doom.rar
+Сообщение от клиента: найди в интернете сайт с расписанием НИРХТУ группы ас-22
+Сообщение от клиента: открой https://ni.muctr.ru/students/schedule/
+Сообщение от клиента: открой первый сайт
+Сообщение от клиента: скачай расписание с первого сайта
+Сообщение от клиента: скачай расписание с https://ni.muctr.ru/students/schedule/
+Сообщение от клиента: скачай яндекс браузер с официального сайта
+Сообщение от клиента: скачай яндекс браузер с официального сайта
+Сообщение от клиента: открой браузер
+Сообщение от клиента: открой яндекс браузер
+Сообщение от клиента: что ты умеешь
+Отключение WebSocket 2427436228240
+WebSocket 2427436228240 отключен
+Новое подключение WebSocket: 1641424363920
+Сообщение от клиента: что ты умеешь
+Сообщение от клиента: открой стим на компьютере
+Сообщение от клиента: открой steam
+Сообщение от клиента: открой Steam
+Сообщение от клиента: найди сайт стим
+Отключение WebSocket 1641424363920
+WebSocket 1641424363920 отключен
+Новое подключение WebSocket: 1706382618128
+Сообщение от клиента: открой блокнот
+Сообщение от клиента: открой расписание.png
+Сообщение от клиента: что ты умеешь
+Сообщение от клиента: создай новый документ word с содержанием - информация о россии
+Сообщение от клиента: открой созданный файл
+Сообщение от клиента: создай файл Россия.docx с информацией о России
+Сообщение от клиента: создай текстовый файл
+Сообщение от клиента: отредактируй Россия.docx добавь информацию о России
+Сообщение от клиента: напиши в файл Россия.docx этот текст **Россия**
+
+Россия — одна из крупнейших стран мира, расположенная в Восточной Европе и Северной Азии. Основная территория страны находится на Евразийском континенте. Форма территории России — огромный полуостров, который начинается с северо-западного Калининградского края и заканчивается южным Приморским краем. Отсюда Россия отделяется от остальных стран только морями.
+
+**История**
+
+Территория современной России была населена с давних времён. На ее месте располагалось множество других государств, в том числе и славянские. В Средние века к Руси присоединялось все больше территорий. В 13 веке появился Великий князь Даниил Александрович, который стал основоположником Московского княжества.
+
+В 16 веке России было дано право на выход в море и образование флота. Однако русские не могли выдержать конкуренцию с англичанами и потеряли свою часть. В XVII веке был возведён московский кремль, который является одним из самых известных памятников России.
+
+В XIX веке к России присоединились Крым и Азиатская часть территории. Однако после поражения в Русско-Японской войне 1904-1905 годов Россия начала распадаться. Первая мировая война еще больше усугубила эту ситуацию. В результате в 1917 году началась революция, после которой к власти пришло Советское правительство.
+
+**Государственный строй**
+
+В 1991 году Россия окончательно отделилась от СССР и стала независимым государством. Первый президентом России стал Борис Ельцин. Однако его время в истории страны было отмечено быстрыми реформами, которые привели к экономической стагнации. Позже на место Ельцина пришёл Владимир Путин, который смог преобразить страну и вернуть ей былую мощь.
+
+Сегодня Россия — это президентская республика с сильной армией и развитой промышленностью. Страна имеет свой флот и космодром в Байконуре. Кроме того, здесь находится несколько объектов ПРО.
+
+**География**
+
+Россия является самой большой страной мира по площади. На территории России находятся десятки различных климатических зон. Восток страны занимают горы, запад — равнина. Из природных ресурсов Россия обладает огромными запасами газа и нефти. Кроме того, здесь находится множество лесов, рек и озер.
+
+**Экономика**
+
+В настоящее время экономика России переживает период быстрого роста после долгих лет стагнации. Основным источником дохода становится экспорт энергоресурсов. Однако страна стремится диверсифицировать свой экономический потенциал и развитые отрасли, такие как авиакосмическая и информационно-коммуникационная, уже начали играть важную роль.
+
+**Культура**
+
+Россия славится своей богатой культурой. На ее территории находятся десятки музеев и галерей с уникальными произведениями искусства. Кроме того, в стране развивается кино- и театральная индустрия.
+
+В современной России популярны такие жанры музыки как поп, хип-хоп, рэп и металл. Немало известных певцов и композиторов родились и проживают на территории страны.
+
+Россия имеет свои национальные праздники — День независимости (6 декабря) и День Победы в Великой Отечественной войне (9 мая). Кроме того, страна отмечает День труда (1 мая).
+
+**Правительство**
+
+Федеральным органом власти является Правительство Российской Федерации. Председатель Государственной думы является вторым человеком в государстве после президента.
+
+### Ключевые факты о России:
+
+*   Территория страны — 17,1 млн км².
+*   Население достигает 145 миллионов человек.
+*   Столица и крупнейший город — Москва.
+*   Основные языки — русский и татарский.
+Сообщение от клиента: напиши в файл Россия.docx этот текст **Россия**
+Отключение WebSocket 1706382618128
+WebSocket 1706382618128 отключен
+Новое подключение WebSocket: 2924118627152
+Сообщение от клиента: найди расписание.png
+Сообщение от клиента: открой его
+Открытие пути: C:\Users\mixai\Desktop\Расписание.png
+Путь открыт: C:\Users\mixai\Desktop\Расписание.png
+Сообщение от клиента: закрой фотографии
+Ошибка обработки сообщения: 'IntentInferencer' object has no attribute '_should_search_web'
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\intent_router.py", line 686, in handle_message
+    intent_data = self.intent_inferencer.infer(message)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\intent_router.py", line 402, in infer
+    if self._should_search_web(normalized):
+       ^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'IntentInferencer' object has no attribute '_should_search_web'
+Отключение WebSocket 2924118627152
+WebSocket 2924118627152 отключен
+Новое подключение WebSocket: 2315312056528
+Сообщение от клиента: закрой расписание.png
+Ошибка обработки сообщения: 'IntentInferencer' object has no attribute '_should_search_web'
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\intent_router.py", line 686, in handle_message
+    intent_data = self.intent_inferencer.infer(message)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\intent_router.py", line 402, in infer
+    if self._should_search_web(normalized):
+       ^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'IntentInferencer' object has no attribute '_should_search_web'
+Отключение WebSocket 2315312056528
+WebSocket 2315312056528 отключен
+Новое подключение WebSocket: 1866720102416
+Сообщение от клиента: измени файл Россия.docx добавь в него текст - информацию о россии
+Редактирование Word-документа: C:\Users\mixai\Desktop\Россия.docx
+Ошибка при редактировании документа C:\Users\mixai\Desktop\Россия.docx: Package not found at 'C:\Users\mixai\Desktop\Россия.docx'
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\tools\files.py", line 410, in edit_word
+    document = Document(str(target))
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\docx\api.py", line 27, in Document
+    document_part = cast("DocumentPart", Package.open(docx).main_document_part)
+                                         ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\docx\opc\package.py", line 126, in open
+    pkg_reader = PackageReader.from_file(pkg_file)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\docx\opc\pkgreader.py", line 22, in from_file
+    phys_reader = PhysPkgReader(pkg_file)
+                  ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\docx\opc\phys_pkg.py", line 21, in __new__
+    raise PackageNotFoundError("Package not found at '%s'" % pkg_file)
+docx.opc.exceptions.PackageNotFoundError: Package not found at 'C:\Users\mixai\Desktop\Россия.docx'
+Отключение WebSocket 1866720102416
+WebSocket 1866720102416 отключен
+Новое подключение WebSocket: 2065646110928
+Сообщение от клиента: создай word файл с текстом "текст"
+Создание файла: C:\Users\mixai\Desktop\с.txt
+Создание завершено: C:\Users\mixai\Desktop\с.txt exists=True size=10
+Сообщение от клиента: создай файл РФ.docx со сгенерированным текстом о России.
+Создание файла: C:\Users\mixai\Desktop\РФ.docx
+Создание завершено: C:\Users\mixai\Desktop\РФ.docx exists=True size=36604
+Отключение WebSocket 2065646110928
+WebSocket 2065646110928 отключен
+Новое подключение WebSocket: 1812015826960
+Сообщение от клиента: создай файл РФ.docx со сгенерированным текстом о России.
+Создание файла: C:\Users\mixai\Desktop\РФ.docx
+Создание завершено: C:\Users\mixai\Desktop\РФ.docx exists=True size=36604
+Сообщение от клиента: создай файл РФ.docx со сгенерированным текстом о России.
+Создание файла: C:\Users\mixai\Desktop\РФ.docx
+Создание завершено: C:\Users\mixai\Desktop\РФ.docx exists=True size=36604
+Сообщение от клиента: сгенерируй текст о россии и вставь в файл РФ.docx
+Ошибка обработки сообщения: 'IntentInferencer' object has no attribute '_should_search_web'
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\intent_router.py", line 686, in handle_message
+    intent_data = self.intent_inferencer.infer(message)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\intent_router.py", line 402, in infer
+    if self._should_search_web(normalized):
+       ^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'IntentInferencer' object has no attribute '_should_search_web'
+Отключение WebSocket 1812015826960
+WebSocket 1812015826960 отключен
+Новое подключение WebSocket: 1812016534864
+Сообщение от клиента: найди на компьютере файл с расписанием
+Сообщение от клиента: найди в интернете скачать dying light the bist торрент и скачай файл
+Сообщение от клиента: найди в интернете скачать dying light the bist торрент
+Ошибка обработки сообщения: 'IntentInferencer' object has no attribute '_should_search_web'
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\intent_router.py", line 686, in handle_message
+    intent_data = self.intent_inferencer.infer(message)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\intent_router.py", line 402, in infer
+    if self._should_search_web(normalized):
+       ^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'IntentInferencer' object has no attribute '_should_search_web'
+Сообщение от клиента: найди в интернете скачать dying light the bist
+Ошибка обработки сообщения: 'IntentInferencer' object has no attribute '_should_search_web'
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\intent_router.py", line 686, in handle_message
+    intent_data = self.intent_inferencer.infer(message)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\intent_router.py", line 402, in infer
+    if self._should_search_web(normalized):
+       ^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'IntentInferencer' object has no attribute '_should_search_web'
+Отключение WebSocket 1812016534864
+WebSocket 1812016534864 отключен
+Новое подключение WebSocket: 1698942190672
+Сообщение от клиента: запусти калькулятор
+Сообщение от клиента: создай файл беларусь.docx и вставь туда текст про беларусь- сгенерируй его
+Создание файла: C:\Users\mixai\Desktop\беларусь.docx
+Создание завершено: C:\Users\mixai\Desktop\беларусь.docx exists=True size=36641
+Отключение WebSocket 1698942190672
+WebSocket 1698942190672 отключен
+Новое подключение WebSocket: 1510915164560
+Сообщение от клиента: какие программы ты нашёл на пк
+Сообщение от клиента: открой калькулятор
+Отключение WebSocket 1510915164560
+WebSocket 1510915164560 отключен
+Новое подключение WebSocket: 2046329476560
+Сообщение от клиента: открой cheat engine
+Сообщение от клиента: создай файл РФ.docx и ставь в него текст про Россию
+Создание файла: C:\Users\mixai\Desktop\РФ.docx
+Создание завершено: C:\Users\mixai\Desktop\РФ.docx exists=True size=36610
+Сообщение от клиента: вставь в файл РФ.docx сгенерированный текст про россию
+Сообщение от клиента: открой РФ.docx
+Открытие пути: C:\Users\mixai\Desktop\РФ.docx
+Путь открыт: C:\Users\mixai\Desktop\РФ.docx
+Сообщение от клиента: сгенерируй текст про Россию и вставь в файл C:\Users\mixai\Desktop\РФ.docx
+Отключение WebSocket 2046329476560
+WebSocket 2046329476560 отключен
+Новое подключение WebSocket: 2200297722896
+Сообщение от клиента: какие программы у меня установленны
+Отключение WebSocket 2200297722896
+WebSocket 2200297722896 отключен
+Новое подключение WebSocket: 2200297892688
+Отключение WebSocket 2200297892688
+WebSocket 2200297892688 отключен
+Новое подключение WebSocket: 2486461452496
+Сообщение от клиента: открой cheat engine на моём пк
+Сообщение от клиента: открой яндекс браузер
+Сообщение от клиента: яндекс
+Сообщение от клиента: Microsoft Edge
+Отключение WebSocket 2486461452496
+WebSocket 2486461452496 отключен
+Новое подключение WebSocket: 2445271487056
+Сообщение от клиента: открой cheat engine
+Сообщение от клиента: открой SIV
+Отключение WebSocket 2445271487056
+WebSocket 2445271487056 отключен
+Новое подключение WebSocket: 2527068226960
+Сообщение от клиента: какие программы установлены
+HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+Ошибка потоковой генерации: 
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 1279, in close_connection
+    await self.transfer_data_task
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 945, in transfer_data
+    message = await self.read_message()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 1015, in read_message
+    frame = await self.read_data_frame(max_size=self.max_size)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 1090, in read_data_frame
+    frame = await self.read_frame(max_size)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 1147, in read_frame
+    frame = await Frame.read(
+            ^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\framing.py", line 71, in read
+    data = await reader(2)
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\AppData\Local\Programs\Python\Python311\Lib\asyncio\streams.py", line 728, in readexactly
+    await self._wait_for_data('readexactly')
+  File "C:\Users\mixai\AppData\Local\Programs\Python\Python311\Lib\asyncio\streams.py", line 522, in _wait_for_data
+    await self._waiter
+asyncio.exceptions.CancelledError
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\uvicorn\protocols\websockets\websockets_impl.py", line 332, in asgi_send
+    await self.send(data)  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 620, in send
+    await self.ensure_open()
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 921, in ensure_open
+    raise self.connection_closed_exc()
+websockets.exceptions.ConnectionClosedError: sent 1012 (service restart); no close frame received
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\starlette\websockets.py", line 97, in send
+    await self._send(message)
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\starlette\_exception_handler.py", line 50, in sender
+    await send(message)
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\uvicorn\protocols\websockets\websockets_impl.py", line 345, in asgi_send
+    raise ClientDisconnected from exc
+uvicorn.protocols.utils.ClientDisconnected
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\main.py", line 144, in websocket_endpoint
+    await websocket.send_text(chunk)
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\starlette\websockets.py", line 188, in send_text
+    await self.send({"type": "websocket.send", "text": data})
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\starlette\websockets.py", line 100, in send
+    raise WebSocketDisconnect(code=1006)
+starlette.websockets.WebSocketDisconnect
+Ошибка в WebSocket: Cannot call "send" once a close message has been sent.
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 1279, in close_connection
+    await self.transfer_data_task
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 945, in transfer_data
+    message = await self.read_message()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 1015, in read_message
+    frame = await self.read_data_frame(max_size=self.max_size)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 1090, in read_data_frame
+    frame = await self.read_frame(max_size)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 1147, in read_frame
+    frame = await Frame.read(
+            ^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\framing.py", line 71, in read
+    data = await reader(2)
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\AppData\Local\Programs\Python\Python311\Lib\asyncio\streams.py", line 728, in readexactly
+    await self._wait_for_data('readexactly')
+  File "C:\Users\mixai\AppData\Local\Programs\Python\Python311\Lib\asyncio\streams.py", line 522, in _wait_for_data
+    await self._waiter
+asyncio.exceptions.CancelledError
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\uvicorn\protocols\websockets\websockets_impl.py", line 332, in asgi_send
+    await self.send(data)  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 620, in send
+    await self.ensure_open()
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\websockets\legacy\protocol.py", line 921, in ensure_open
+    raise self.connection_closed_exc()
+websockets.exceptions.ConnectionClosedError: sent 1012 (service restart); no close frame received
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\starlette\websockets.py", line 97, in send
+    await self._send(message)
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\starlette\_exception_handler.py", line 50, in sender
+    await send(message)
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\uvicorn\protocols\websockets\websockets_impl.py", line 345, in asgi_send
+    raise ClientDisconnected from exc
+uvicorn.protocols.utils.ClientDisconnected
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\main.py", line 144, in websocket_endpoint
+    await websocket.send_text(chunk)
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\starlette\websockets.py", line 188, in send_text
+    await self.send({"type": "websocket.send", "text": data})
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\starlette\websockets.py", line 100, in send
+    raise WebSocketDisconnect(code=1006)
+starlette.websockets.WebSocketDisconnect
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\main.py", line 147, in websocket_endpoint
+    await websocket.send_text(f"Ошибка генерации: {exc}")
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\starlette\websockets.py", line 188, in send_text
+    await self.send({"type": "websocket.send", "text": data})
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\starlette\websockets.py", line 112, in send
+    raise RuntimeError('Cannot call "send" once a close message has been sent.')
+RuntimeError: Cannot call "send" once a close message has been sent.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\mixai\Desktop\LocalWinAgent\main.py", line 149, in websocket_endpoint
+    await websocket.send_text(json.dumps({"done": True, "model": session.model}))
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\starlette\websockets.py", line 188, in send_text
+    await self.send({"type": "websocket.send", "text": data})
+  File "C:\Users\mixai\Desktop\LocalWinAgent\.venv\Lib\site-packages\starlette\websockets.py", line 112, in send
+    raise RuntimeError('Cannot call "send" once a close message has been sent.')
+RuntimeError: Cannot call "send" once a close message has been sent.
+Новое подключение WebSocket: 1319437500880
+Сообщение от клиента: list_apps
+HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+Отключение WebSocket 1319437500880
+WebSocket 1319437500880 отключен
+Новое подключение WebSocket: 1319437674448
+Сообщение от клиента: покажи установленные программы
+Отключение WebSocket 1319437674448
+WebSocket 1319437674448 отключен
+Новое подключение WebSocket: 2285680588688
+Сообщение от клиента: найди в интернете упоминание номера 915 660 77 63
+Сообщение от клиента: найди в интернете упоминание номера 915 660 77 63 и напиши что про него пишут в интернете
+Отключение WebSocket 2285680588688
+WebSocket 2285680588688 отключен
+Новое подключение WebSocket: 1452171680272
+Новое подключение WebSocket: 1452172094032
+Отключение WebSocket 1452172094032
+WebSocket 1452172094032 отключен
+Сообщение от клиента: найди в интернете расписание нирхту для группы ас 22
+Сообщение от клиента: найди расписание на сайте нирхту для группы ас-22, там будет файл с расписанием, скачай его.
+Сообщение от клиента: найди расписание на сайте нирхту для группы ас-22
+Отключение WebSocket 1452171680272
+WebSocket 1452171680272 отключен
+Новое подключение WebSocket: 1452172136336
+Сообщение от клиента: найди расписание на сайте нирхту для группы ас-22
+Отключение WebSocket 1452172136336
+WebSocket 1452172136336 отключен
+Новое подключение WebSocket: 1660572806992
+Сообщение от клиента: найди расписание на сайте нирхту для группы ас-22, там будет файл с расписанием, скачай его
+Сообщение от клиента: найди расписание на сайте https://ni.muctr.ru/ для группы ас-22, там будет файл с расписанием, скачай его
+Сообщение от клиента: найди расписание для группы ас 22 нирхту
+Отключение WebSocket 1660572806992
+WebSocket 1660572806992 отключен
